@@ -9,17 +9,25 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@next-auth/prisma-adapter": "^1.0.7",
+    "bcryptjs": "^3.0.3",
     "next": "16.2.10",
+    "next-auth": "^4.24.14",
+    "openai": "^6.45.0",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@prisma/client": "^6.19.3",
     "@tailwindcss/postcss": "^4",
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
+    "prisma": "^6.19.3",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
