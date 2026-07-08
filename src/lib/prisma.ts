@@ -1,36 +1,16 @@
-import { existsSync, readFileSync } from "fs";
-import path from "path";
-import { PrismaClient } from "@prisma/client";
+﻿import { PrismaClient } from "@prisma/client";
 
-const envFilePath = path.resolve(process.cwd(), ".env.local");
-
-if (existsSync(envFilePath)) {
-  for (const line of readFileSync(envFilePath, "utf8").split(/\r?\n/)) {
-    const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
-    if (!match) continue;
-
-    const [, key, rawValue] = match;
-    let value = rawValue.trim();
-
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-
-    if (process.env[key] == null && value) {
-      process.env[key] = value;
-    }
-  }
+declare global {
+  // eslint-disable-next-line no-var
+  var __prisma: PrismaClient | undefined;
 }
 
-const globalForPrisma = global as unknown as { prisma: PrismaClient };
-
 export const prisma =
-  globalForPrisma.prisma ||
+  global.__prisma ??
   new PrismaClient({
-    log: ["query"],
+    log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
   });
 
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+if (process.env.NODE_ENV !== "production") {
+  global.__prisma = prisma;
+}
