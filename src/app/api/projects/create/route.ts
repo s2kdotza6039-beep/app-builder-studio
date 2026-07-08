@@ -4,19 +4,56 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { generateAppPlan } from "@/services/ai";
 
+// Project limits per plan
+const PROJECT_LIMITS: Record<string, number> = {
+  FREE: 3,
+  PRO: 20,
+  BUSINESS: 100,
+};
+
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    
-    const { idea, appType, complexity } = await req.json();
-    if (!idea || !appType || !complexity) return NextResponse.json({ error: "Missing fields" }, { status: 400 });
-    
-    const user = await prisma.user.findUnique({ where: { email: session.user.email } });
-    if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
 
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const { idea, appType, complexity } = await req.json();
+
+    if (!idea || !appType || !complexity) {
+      return NextResponse.json({ error: "Missing fields" }, { status: 400 });
+    }
+
+    // Find the logged-in user
+    const user = await prisma.user.findUnique({
+      where: { email: session.user.email },
+      include: { projects: true },
+    });
+
+    if (!user) {
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
+
+    // ADMIN = unlimited (this is YOU, Thulani)
+    if (user.role !== "ADMIN") {
+      const limit = PROJECT_LIMITS[user.subscription_plan] || 3;
+      const currentCount = user.projects.length;
+
+      if (currentCount >= limit) {
+        return NextResponse.json(
+          {
+            error: `You have reached your limit of ${limit} projects on the ${user.subscription_plan} plan. Upgrade to create more.`,
+          },
+          { status: 403 }
+        );
+      }
+    }
+
+    // Generate the AI plan
     const plan = await generateAppPlan(idea, appType, complexity);
 
+    // Save the project
     const project = await prisma.project.create({
       data: {
         user_id: user.id,

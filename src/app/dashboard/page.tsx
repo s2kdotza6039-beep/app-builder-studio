@@ -4,6 +4,12 @@ import Link from "next/link";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
+const PROJECT_LIMITS: Record<string, number> = {
+  FREE: 3,
+  PRO: 20,
+  BUSINESS: 100,
+};
+
 export default async function DashboardPage() {
   const session = await getServerSession(authOptions);
   if (!session) redirect("/auth");
@@ -17,6 +23,11 @@ export default async function DashboardPage() {
     },
   });
 
+  const isAdmin = user?.role === "ADMIN";
+  const limit = isAdmin ? Infinity : PROJECT_LIMITS[user?.subscription_plan || "FREE"] || 3;
+  const projectCount = user?.projects.length || 0;
+  const canCreate = isAdmin || projectCount < limit;
+
   return (
     <main className="min-h-screen bg-slate-950 px-6 py-10 text-white">
       <div className="mx-auto max-w-5xl">
@@ -28,14 +39,25 @@ export default async function DashboardPage() {
             <h1 className="text-4xl font-bold">
               Welcome, {session.user?.name?.split(" ")[0] || "Founder"}
             </h1>
+            <p className="mt-2 text-sm text-slate-500">
+              {isAdmin
+                ? "Admin Access — Unlimited Projects"
+                : `${projectCount} / ${limit} projects used (${user?.subscription_plan} plan)`}
+            </p>
           </div>
 
-          <Link
-            href="/builder/new"
-            className="rounded-xl bg-white px-5 py-3 text-sm font-semibold text-slate-900 transition hover:bg-slate-200"
-          >
-            + New Project
-          </Link>
+          {canCreate ? (
+            <Link
+              href="/builder/new"
+              className="rounded-xl bg-white px-5 py-3 text-sm font-semibold text-slate-900 transition hover:bg-slate-200"
+            >
+              + New Project
+            </Link>
+          ) : (
+            <span className="rounded-xl bg-slate-800 px-5 py-3 text-sm font-semibold text-slate-500">
+              Limit Reached — Upgrade Plan
+            </span>
+          )}
         </div>
 
         <div className="mt-10">
