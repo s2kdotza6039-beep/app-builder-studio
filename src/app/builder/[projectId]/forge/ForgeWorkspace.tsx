@@ -4,41 +4,9 @@ import { useState } from "react";
 
 interface ProjectFile {
   id: string;
-  project_id: string;
   file_path: string;
   content: string;
   language: string;
-  created_at: Date;
-  updated_at: Date;
-}
-
-interface ForgeResponse {
-  success?: boolean;
-  filesGenerated?: number;
-  files?: ProjectFile[];
-  error?: string;
-}
-
-async function readForgeResponse(
-  response: Response
-): Promise<ForgeResponse> {
-  const responseText = await response.text();
-
-  if (!responseText) {
-    throw new Error(
-      `The Forge returned an empty response. HTTP status: ${response.status}.`
-    );
-  }
-
-  try {
-    return JSON.parse(responseText) as ForgeResponse;
-  } catch {
-    console.error("Non-JSON Forge response:", responseText);
-
-    throw new Error(
-      `The Forge returned an HTML error page instead of JSON. HTTP status: ${response.status}. Check the VS Code terminal for the server error.`
-    );
-  }
 }
 
 export default function ForgeWorkspace({
@@ -50,306 +18,181 @@ export default function ForgeWorkspace({
   projectName: string;
   initialFiles: ProjectFile[];
 }) {
-  const [files, setFiles] = useState<ProjectFile[]>(
-    initialFiles || []
+  const [files, setFiles] = useState<ProjectFile[]>(initialFiles || []);
+  const [selectedFile, setSelectedFile] = useState<ProjectFile | null>(
+    initialFiles?.[0] || null
   );
-
-  const [selectedFile, setSelectedFile] =
-    useState<ProjectFile | null>(
-      initialFiles?.[0] || null
-    );
-
-  const [generating, setGenerating] =
-    useState(false);
-
-  const [message, setMessage] =
-    useState("");
+  const [generating, setGenerating] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [message, setMessage] = useState("");
 
   const handleGenerate = async () => {
-    if (generating) {
-      return;
-    }
-
+    if (generating) return;
     setGenerating(true);
     setMessage("");
 
     try {
-      // ✅ CHANGED: Point directly to /forge-api
-      const response = await fetch(
-        `/api/projects/${projectId}/forge-api`,
-        {
-          method: "POST",
-          headers: {
-            Accept: "application/json",
-          },
-        }
-      );
+      const res = await fetch(`/api/projects/${projectId}/forge-api`, {
+        method: "POST",
+        headers: { Accept: "application/json" },
+      });
+      const text = await res.text();
+      let data: any;
+      try { data = JSON.parse(text); } catch { throw new Error("Invalid response"); }
 
-      const data = await readForgeResponse(response);
-
-      if (!response.ok) {
-        throw new Error(
-          data.error ||
-            `Code generation failed with HTTP status ${response.status}.`
-        );
-      }
-
-      if (!Array.isArray(data.files)) {
-        throw new Error(
-          "The Forge did not return a valid file list."
-        );
-      }
+      if (!res.ok) throw new Error(data.error || "Generation failed");
+      if (!Array.isArray(data.files)) throw new Error("No file list returned");
 
       setFiles(data.files);
       setSelectedFile(data.files[0] || null);
-
-      setMessage(
-        `Generated ${data.filesGenerated ?? data.files.length} files successfully.`
-      );
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : "Code generation failed.";
-
-      console.error("Forge generation error:", error);
-
-      setMessage(errorMessage);
+      setMessage(`Generated ${data.filesGenerated ?? data.files.length} files successfully.`);
+    } catch (err: any) {
+      setMessage(err.message);
     } finally {
       setGenerating(false);
     }
   };
 
-  const getFileIcon = (filePath: string) => {
-    if (filePath.endsWith(".tsx")) {
-      return "📄";
-    }
+  const handleDownload = async () => {
+    if (downloading || files.length === 0) return;
+    setDownloading(true);
+    setMessage("");
 
-    if (filePath.endsWith(".ts")) {
-      return "📘";
-    }
+    try {
+      const res = await fetch(`/api/projects/${projectId}/download-api`, { method: "GET" });
+      if (!res.ok) {
+        let msg = "Download failed";
+        try { const e = await res.json(); msg = e.error || msg; } catch {}
+        throw new Error(msg);
+      }
 
-    if (filePath.endsWith(".json")) {
-      return "📋";
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${projectName.toLowerCase().replace(/\s+/g, "-")}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      setMessage("Project downloaded successfully.");
+    } catch (err: any) {
+      setMessage(err.message);
+    } finally {
+      setDownloading(false);
     }
+  };
 
-    if (filePath.endsWith(".md")) {
-      return "📝";
-    }
-
-    if (filePath.endsWith(".css")) {
-      return "🎨";
-    }
-
+  const getFileIcon = (path: string) => {
+    if (path.endsWith(".tsx")) return "📄";
+    if (path.endsWith(".ts")) return "📘";
+    if (path.endsWith(".json")) return "📋";
+    if (path.endsWith(".md")) return "📝";
+    if (path.endsWith(".css")) return "🎨";
     return "📎";
   };
 
   return (
     <div className="flex h-full">
-      {/* File explorer */}
-      <aside className="flex w-[280px] flex-shrink-0 flex-col border-r border-slate-800 bg-slate-900">
-        <div className="border-b border-slate-800 bg-slate-950 p-4">
-          <h2 className="text-sm font-bold uppercase tracking-wider text-slate-300">
-            File Explorer
-          </h2>
+      {/* LEFT: File Explorer */}
+      <aside className="w-[280px] flex-shrink-0 border-r border-slate-800 bg-slate-900 flex flex-col">
+        <div className="p-4 border-b border-slate-800 bg-slate-950">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-slate-300">File Explorer</h2>
         </div>
-
-        <div className="border-b border-slate-800 p-3">
-          <button
-            type="button"
-            onClick={handleGenerate}
-            disabled={generating}
-            className="w-full rounded-lg bg-emerald-600 px-3 py-2.5 text-sm font-semibold transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {generating
-              ? "Generating Code..."
-              : "🔨 Generate Code"}
+        <div className="p-3 border-b border-slate-800 space-y-2">
+          <button onClick={handleGenerate} disabled={generating}
+            className="w-full rounded-lg bg-emerald-600 px-3 py-2.5 text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50">
+            {generating ? "⚙️ Generating..." : "🔨 Generate Code"}
           </button>
-
+          <button onClick={handleDownload} disabled={downloading || files.length === 0}
+            className="w-full rounded-lg bg-blue-600 px-3 py-2.5 text-sm font-semibold hover:bg-blue-500 disabled:opacity-50">
+            {downloading ? "📦 Preparing..." : "📦 Download Project"}
+          </button>
           {message && (
-            <div
-              className={`mt-3 rounded-lg border p-3 text-xs ${
-                message.toLowerCase().includes("success")
-                  ? "border-emerald-800 bg-emerald-950/40 text-emerald-300"
-                  : "border-red-800 bg-red-950/40 text-red-300"
-              }`}
-            >
+            <div className={`rounded-lg border p-3 text-xs ${message.toLowerCase().includes("success") ? "border-emerald-800 bg-emerald-950/40 text-emerald-300" : "border-red-800 bg-red-950/40 text-red-300"}`}>
               {message}
             </div>
           )}
         </div>
-
         <div className="flex-1 overflow-y-auto p-2">
           {files.length === 0 ? (
-            <div className="p-4 text-center">
-              <p className="mb-2 text-sm text-slate-500">
-                No files generated.
-              </p>
-
-              <p className="text-xs text-slate-600">
-                Generate code to transform the approved plan into application files.
-              </p>
-            </div>
+            <div className="p-4 text-center text-sm text-slate-500">No files yet.</div>
           ) : (
             <ul className="space-y-1">
-              {files.map((file) => (
-                <li key={file.id}>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setSelectedFile(file)
-                    }
-                    className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition ${
-                      selectedFile?.id === file.id
-                        ? "border border-orange-800 bg-orange-950/40 text-orange-300"
-                        : "text-slate-400 hover:bg-slate-800 hover:text-white"
-                    }`}
-                  >
-                    <span>
-                      {getFileIcon(file.file_path)}
-                    </span>
-
-                    <span className="truncate font-mono text-xs">
-                      {file.file_path}
-                    </span>
+              {files.map((f) => (
+                <li key={f.id}>
+                  <button onClick={() => setSelectedFile(f)}
+                    className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition ${selectedFile?.id === f.id ? "border border-orange-800 bg-orange-900/40 text-orange-300" : "text-slate-400 hover:bg-slate-800 hover:text-white"}`}>
+                    <span>{getFileIcon(f.file_path)}</span>
+                    <span className="truncate font-mono text-xs">{f.file_path}</span>
                   </button>
                 </li>
               ))}
             </ul>
           )}
         </div>
-
-        <div className="border-t border-slate-800 p-3 text-center text-xs text-slate-600">
-          {files.length} generated{" "}
-          {files.length === 1 ? "file" : "files"}
+        <div className="p-3 border-t border-slate-800 text-xs text-slate-600 text-center">
+          {files.length} file{files.length !== 1 ? "s" : ""}
         </div>
       </aside>
 
-      {/* Code viewer */}
-      <section className="flex min-w-0 flex-1 flex-col bg-slate-950">
-        <div className="flex items-center justify-between border-b border-slate-800 bg-slate-900 p-3">
-          <div className="flex min-w-0 items-center gap-2">
-            {selectedFile && (
-              <span>
-                {getFileIcon(
-                  selectedFile.file_path
-                )}
-              </span>
-            )}
-
-            <p className="truncate font-mono text-sm text-slate-400">
-              {selectedFile?.file_path ||
-                "No file selected"}
-            </p>
-          </div>
-
-          {selectedFile && (
-            <span className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-500">
-              {selectedFile.language}
-            </span>
-          )}
+      {/* MIDDLE: Code Viewer */}
+      <section className="flex-1 flex flex-col bg-slate-950 min-w-0">
+        <div className="p-3 border-b border-slate-800 bg-slate-900 flex items-center justify-between">
+          <p className="font-mono text-sm text-slate-400 truncate">{selectedFile?.file_path || "No file selected"}</p>
+          {selectedFile && <span className="text-xs text-slate-500 bg-slate-800 px-2 py-0.5 rounded">{selectedFile.language}</span>}
         </div>
-
-        <div className="flex-1 overflow-auto">
+        <div className="flex-1 overflow-auto p-6">
           {selectedFile ? (
-            <pre className="min-h-full whitespace-pre-wrap p-6 font-mono text-sm leading-relaxed text-slate-300">
-              <code>
-                {selectedFile.content}
-              </code>
-            </pre>
+            <pre className="text-sm text-slate-300 font-mono whitespace-pre-wrap"><code>{selectedFile.content}</code></pre>
           ) : (
-            <div className="flex h-full items-center justify-center">
-              <div className="text-center">
-                <p className="mb-2 text-lg text-slate-500">
-                  No file selected
-                </p>
-
-                <p className="text-sm text-slate-600">
-                  Generate code or select a file from the explorer.
-                </p>
-              </div>
-            </div>
+            <div className="flex items-center justify-center h-full text-slate-500">Select a file to view</div>
           )}
         </div>
       </section>
 
-      {/* Preview panel */}
-      <aside className="flex w-[400px] flex-shrink-0 flex-col border-l border-slate-800 bg-slate-900">
-        <div className="border-b border-slate-800 bg-slate-950 p-3">
-          <h2 className="text-sm font-bold uppercase tracking-wider text-slate-300">
-            Preview
-          </h2>
+      {/* RIGHT: Preview */}
+      <aside className="w-[400px] flex-shrink-0 border-l border-slate-800 bg-slate-900 flex flex-col">
+        <div className="p-3 border-b border-slate-800 bg-slate-950">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-slate-300">Preview</h2>
         </div>
-
         <div className="flex-1 overflow-auto bg-slate-100 p-3">
-          <div className="flex h-full flex-col overflow-hidden rounded-lg bg-white shadow-xl">
-            <div className="flex items-center gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2">
+          <div className="bg-white rounded-lg shadow-xl h-full flex flex-col">
+            <div className="flex items-center gap-3 border-b px-4 py-2 bg-slate-50 rounded-t-lg">
               <div className="flex gap-1.5">
-                <div className="h-2.5 w-2.5 rounded-full bg-red-400" />
-                <div className="h-2.5 w-2.5 rounded-full bg-yellow-400" />
-                <div className="h-2.5 w-2.5 rounded-full bg-green-400" />
+                <div className="w-2.5 h-2.5 rounded-full bg-red-400" />
+                <div className="w-2.5 h-2.5 rounded-full bg-yellow-400" />
+                <div className="w-2.5 h-2.5 rounded-full bg-green-400" />
               </div>
-
-              <div className="flex-1 rounded border border-slate-200 bg-white px-3 py-1 text-center text-xs text-slate-400">
-                {projectName
-                  .toLowerCase()
-                  .replace(/\s+/g, "-")}
-                .app
-              </div>
+              <div className="flex-1 text-center text-xs text-slate-400">{projectName.toLowerCase().replace(/\s+/g, "-")}.app</div>
             </div>
-
-            <div className="flex-1 p-6 text-slate-800">
+            <div className="flex-1 p-6">
               {files.length > 0 ? (
-                <>
-                  <div className="mb-5 rounded-xl bg-gradient-to-b from-slate-900 to-slate-800 p-6 text-white">
-                    <h1 className="text-2xl font-bold">
-                      {projectName}
-                    </h1>
-
-                    <p className="mt-2 text-sm text-slate-400">
-                      Build files generated successfully.
-                    </p>
+                <div>
+                  <div className="bg-gradient-to-b from-slate-900 to-slate-800 rounded-xl p-6 text-white mb-5">
+                    <h1 className="text-2xl font-bold">{projectName}</h1>
+                    <p className="text-sm text-slate-400 mt-2">{files.length} files ready</p>
                   </div>
-
-                  <p className="mb-3 text-sm font-semibold">
-                    Generated Pages
-                  </p>
-
+                  <button onClick={handleDownload} disabled={downloading}
+                    className="w-full rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white hover:bg-emerald-500 mb-4 disabled:opacity-50">
+                    {downloading ? "Preparing..." : "📦 Download Project as ZIP"}
+                  </button>
+                  <p className="text-sm font-semibold mb-3">Generated Pages</p>
                   <div className="space-y-2">
-                    {files
-                      .filter((file) =>
-                        file.file_path.endsWith(
-                          "page.tsx"
-                        )
-                      )
-                      .map((file) => (
-                        <button
-                          type="button"
-                          key={file.id}
-                          onClick={() =>
-                            setSelectedFile(file)
-                          }
-                          className="flex w-full items-center gap-2 rounded-lg border border-slate-200 p-2 text-left text-xs text-slate-600 transition hover:bg-slate-50"
-                        >
-                          <span className="h-2 w-2 rounded-full bg-emerald-400" />
-
-                          <span className="truncate">
-                            {file.file_path}
-                          </span>
-                        </button>
-                      ))}
+                    {files.filter((f) => f.file_path.endsWith("page.tsx")).map((f) => (
+                      <button key={f.id} onClick={() => setSelectedFile(f)}
+                        className="flex w-full items-center gap-2 rounded-lg border p-2 text-xs text-slate-600 hover:bg-slate-50">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                        {f.file_path}
+                      </button>
+                    ))}
                   </div>
-                </>
+                </div>
               ) : (
-                <div className="flex h-full items-center justify-center text-center">
+                <div className="flex items-center justify-center h-full text-slate-400 text-center">
                   <div>
-                    <p className="mb-2 font-semibold text-slate-400">
-                      No Preview Yet
-                    </p>
-
-                    <p className="text-xs text-slate-500">
-                      Generate the project files to begin Stage 2.
-                    </p>
+                    <p className="font-semibold mb-2">No Preview Yet</p>
+                    <p className="text-xs text-slate-500">Generate code to see your app</p>
                   </div>
                 </div>
               )}
