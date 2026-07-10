@@ -7,6 +7,8 @@ import ExportModal from "./ExportModal";
 import RoutesEditor from "./RoutesEditor";
 import FeaturesEditor from "./FeaturesEditor";
 import DatabaseEditor from "./DatabaseEditor";
+import ShangTsung from "./ShangTsung";
+
 
 export default async function ProjectOverviewPage(props: {
   params: Promise<{ projectId: string }>;
@@ -49,7 +51,10 @@ export default async function ProjectOverviewPage(props: {
           <RoutesEditor projectId={projectId} initialRoutes={project.routes} />
           <FeaturesEditor projectId={projectId} initialFeatures={project.features} />
           <DatabaseEditor projectId={projectId} initialTables={project.databaseTables} />
+
         </div>
+
+              <ShangTsung projectId={projectId} />
       </div>
     </main>
   );
