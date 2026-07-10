@@ -6,7 +6,7 @@ interface Route {
   id: string;
   page_name: string;
   route_path: string;
-  purpose: string;
+  purpose: string | null;
 }
 
 export default function RoutesEditor({
@@ -30,7 +30,11 @@ export default function RoutesEditor({
 
   const handleEdit = (route: Route) => {
     setEditingId(route.id);
-    setEditForm({ page_name: route.page_name, route_path: route.route_path, purpose: route.purpose || "" });
+    setEditForm({
+      page_name: route.page_name,
+      route_path: route.route_path,
+      purpose: route.purpose || "",
+    });
   };
 
   const handleSave = async () => {
@@ -165,7 +169,7 @@ export default function RoutesEditor({
               <div>
                 <p className="font-bold">{route.page_name}</p>
                 <p className="text-xs text-slate-500">{route.route_path}</p>
-                <p className="text-xs text-slate-400 mt-1">{route.purpose}</p>
+                <p className="text-xs text-slate-400 mt-1">{route.purpose || ""}</p>
                 <div className="flex gap-2 mt-2">
                   <button onClick={() => handleEdit(route)} className="text-xs text-blue-400 hover:text-blue-300">Edit</button>
                   <button onClick={() => handleDelete(route.id)} className="text-xs text-red-400 hover:text-red-300">Delete</button>

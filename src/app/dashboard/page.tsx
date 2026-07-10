@@ -12,10 +12,14 @@ const PROJECT_LIMITS: Record<string, number> = {
 
 export default async function DashboardPage() {
   const session = await getServerSession(authOptions);
-  if (!session) redirect("/auth");
+
+  // Type-safe check: ensure session, user, and email all exist before querying DB
+  if (!session?.user?.email) {
+    redirect("/auth");
+  }
 
   const user = await prisma.user.findUnique({
-    where: { email: session.user.email! },
+    where: { email: session.user.email },
     include: {
       projects: {
         orderBy: { created_at: "desc" },
@@ -23,9 +27,13 @@ export default async function DashboardPage() {
     },
   });
 
-  const isAdmin = user?.role === "ADMIN";
-  const limit = isAdmin ? Infinity : PROJECT_LIMITS[user?.subscription_plan || "FREE"] || 3;
-  const projectCount = user?.projects.length || 0;
+  if (!user) {
+    redirect("/auth");
+  }
+
+  const isAdmin = user.role === "ADMIN";
+  const limit = isAdmin ? Infinity : PROJECT_LIMITS[user.subscription_plan || "FREE"] || 3;
+  const projectCount = user.projects.length;
   const canCreate = isAdmin || projectCount < limit;
 
   return (
@@ -37,12 +45,12 @@ export default async function DashboardPage() {
               App Builder Studio
             </p>
             <h1 className="text-4xl font-bold">
-              Welcome, {session.user?.name?.split(" ")[0] || "Founder"}
+              Welcome, {session.user.name?.split(" ")[0] || "Founder"}
             </h1>
             <p className="mt-2 text-sm text-slate-500">
               {isAdmin
                 ? "Admin Access — Unlimited Projects"
-                : `${projectCount} / ${limit} projects used (${user?.subscription_plan} plan)`}
+                : `${projectCount} / ${limit} projects used (${user.subscription_plan} plan)`}
             </p>
           </div>
 
@@ -63,7 +71,7 @@ export default async function DashboardPage() {
         <div className="mt-10">
           <h2 className="text-xl font-semibold">Your projects</h2>
 
-          {user?.projects.length === 0 && (
+          {user.projects.length === 0 && (
             <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-900 p-8 text-center">
               <p className="text-slate-400">
                 You haven't created any projects yet. Start by describing your
@@ -73,7 +81,7 @@ export default async function DashboardPage() {
           )}
 
           <div className="mt-6 grid gap-4 sm:grid-cols-2">
-            {user?.projects.map((project) => (
+            {user.projects.map((project) => (
               <Link
                 key={project.id}
                 href={`/builder/${project.id}/overview`}

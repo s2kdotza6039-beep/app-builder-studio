@@ -5,7 +5,7 @@ import { useState } from "react";
 interface DbTable {
   id: string;
   table_name: string;
-  purpose: string;
+  purpose: string | null;
   fields_json: any;
 }
 
@@ -196,7 +196,7 @@ export default function DatabaseEditor({
             ) : (
               <div>
                 <p className="font-bold text-emerald-400 font-mono">{table.table_name}</p>
-                <p className="text-xs text-slate-500 mt-1">{table.purpose}</p>
+                <p className="text-xs text-slate-500 mt-1">{table.purpose || ""}</p>
                 <div className="flex flex-wrap gap-1 mt-2">
                   {Array.isArray(table.fields_json) &&
                     table.fields_json.map((f: any, i: number) => (

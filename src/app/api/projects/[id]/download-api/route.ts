@@ -1,8 +1,41 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import JSZip from "jszip";
+
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+
+export const runtime = "nodejs";
+
+function createSafeName(value: string | null) {
+  return (value || "my-app")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9-]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function createSafeFilePath(value: string) {
+  const filePath = value.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!filePath || filePath.split("/").includes("..")) return null;
+  return filePath;
+}
+
+function completePackageJson(content: string, projectName: string) {
+  try {
+    const packageJson = JSON.parse(content);
+    packageJson.name = createSafeName(projectName);
+    packageJson.private = true;
+    packageJson.scripts = { dev: "next dev", build: "next build", start: "next start", ...(packageJson.scripts || {}) };
+    packageJson.dependencies = { next: "^15.0.0", react: "^18.0.0", "react-dom": "^18.0.0", ...(packageJson.dependencies || {}) };
+    packageJson.devDependencies = { "@types/node": "^20.0.0", "@types/react": "^18.0.0", "@types/react-dom": "^18.0.0", autoprefixer: "^10.4.20", postcss: "^8.4.47", tailwindcss: "^3.4.0", typescript: "^5.0.0", ...(packageJson.devDependencies || {}) };
+    return JSON.stringify(packageJson, null, 2);
+  } catch {
+    return content;
+  }
+}
 
 export async function GET(
   _request: Request,
@@ -12,213 +45,77 @@ export async function GET(
     const session = await getServerSession(authOptions);
 
     if (!session?.user?.email) {
-      return NextResponse.json(
-        { error: "Unauthorized" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email },
+    const currentUser = await prisma.user.findUnique({
+      where: {
+        email: session.user.email,
+      },
     });
 
-    if (!user) {
-      return NextResponse.json(
-        { error: "User not found" },
-        { status: 404 }
-      );
+    if (!currentUser) {
+      return NextResponse.json({ error: "User account not found." }, { status: 404 });
     }
 
     const { id: projectId } = await context.params;
 
-    // Load the project with all its generated files
+    const founderEmail = process.env.FOUNDER_EMAIL?.trim().toLowerCase() || "";
+    const currentEmail = currentUser.email?.trim().toLowerCase() || "";
+
+    const canAccessAnyProject =
+      currentUser.role === "ADMIN" ||
+      (founderEmail !== "" && currentEmail === founderEmail);
+
     const project = await prisma.project.findFirst({
-      where: {
-        id: projectId,
-        user_id: user.id,
-      },
+      where: canAccessAnyProject
+        ? { id: projectId }
+        : { id: projectId, user_id: currentUser.id },
       include: {
-        files: {
-          orderBy: { file_path: "asc" },
-        },
+        files: { orderBy: { file_path: "asc" } },
       },
     });
 
-    if (!project) {
+    if (!project || project.files.length === 0) {
       return NextResponse.json(
-        { error: "Project not found or access denied" },
+        { error: "Project not found or no files generated." },
         { status: 404 }
       );
     }
 
-    if (project.files.length === 0) {
-      return NextResponse.json(
-        {
-          error:
-            "No files have been generated yet. Enter The Forge and click Generate Code first.",
-        },
-        { status: 400 }
-      );
-    }
-
-    // Create the ZIP archive in memory
+    const projectName = project.app_name || "My App";
+    const safeName = createSafeName(projectName);
     const zip = new JSZip();
-    const rootFolder = zip.folder(
-      (project.app_name || "my-app")
-        .toLowerCase()
-        .replace(/\s+/g, "-")
-        .replace(/[^a-z0-9-]/g, "")
-    );
+    const projectFolder = zip.folder(safeName);
 
-    if (!rootFolder) {
-      return NextResponse.json(
-        { error: "Failed to create archive" },
-        { status: 500 }
-      );
+    if (projectFolder) {
+      for (const file of project.files) {
+        const filePath = createSafeFilePath(file.file_path);
+        if (filePath) {
+          let fileContent = file.content;
+          if (filePath === "package.json") {
+            fileContent = completePackageJson(file.content, projectName);
+          }
+          projectFolder.file(filePath, fileContent);
+        }
+      }
     }
 
-    // Add every generated file into the ZIP
-    for (const file of project.files) {
-      rootFolder.file(file.file_path, file.content);
-    }
-
-    // Add boilerplate files that every Next.js project needs
-    rootFolder.file(
-      "globals.css",
-      `@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-:root {
-  --foreground: #ffffff;
-  --background: #0a0a0a;
-}
-
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
-}
-`
-    );
-
-    rootFolder.file(
-      "tailwind.config.ts",
-      `import type { Config } from "tailwindcss";
-
-const config: Config = {
-  content: [
-    "./app/**/*.{js,ts,jsx,tsx,mdx}",
-    "./components/**/*.{js,ts,jsx,tsx,mdx}",
-  ],
-  theme: {
-    extend: {},
-  },
-  plugins: [],
-};
-
-export default config;
-`
-    );
-
-    rootFolder.file(
-      "next.config.ts",
-      `import type { NextConfig } from "next";
-
-const nextConfig: NextConfig = {};
-
-export default nextConfig;
-`
-    );
-
-    rootFolder.file(
-      "tsconfig.json",
-      JSON.stringify(
-        {
-          compilerOptions: {
-            target: "ES2017",
-            lib: ["dom", "dom.iterable", "esnext"],
-            allowJs: true,
-            skipLibCheck: true,
-            strict: true,
-            noEmit: true,
-            esModuleInterop: true,
-            module: "esnext",
-            moduleResolution: "bundler",
-            resolveJsonModule: true,
-            isolatedModules: true,
-            jsx: "preserve",
-            incremental: true,
-            plugins: [
-              {
-                name: "next",
-              },
-            ],
-            paths: {
-              "@/*": ["./*"],
-            },
-          },
-          include: [
-            "**/*.ts",
-            "**/*.tsx",
-            ".next/types/**/*.ts",
-          ],
-          exclude: ["node_modules"],
-        },
-        null,
-        2
-      )
-    );
-
-    rootFolder.file(
-      "postcss.config.mjs",
-      `/** @type {import('postcss-load-config').Config} */
-const config = {
-  plugins: {
-    tailwindcss: {},
-    autoprefixer: {},
-  },
-};
-
-export default config;
-`
-    );
-
-    // Generate the ZIP as a binary buffer
     const zipBuffer = await zip.generateAsync({
-      type: "nodebuffer",
+      type: "arraybuffer",
       compression: "DEFLATE",
-      compressionOptions: {
-        level: 6,
-      },
+      compressionOptions: { level: 6 },
     });
 
-    // Create a safe filename
-    const safeName = (project.app_name || "my-app")
-      .toLowerCase()
-      .replace(/\s+/g, "-")
-      .replace(/[^a-z0-9-]/g, "");
-
-    // Return the ZIP file as a downloadable response
-    return new NextResponse(zipBuffer, {
+    return new Response(zipBuffer, {
       status: 200,
       headers: {
         "Content-Type": "application/zip",
         "Content-Disposition": `attachment; filename="${safeName}.zip"`,
-        "Content-Length": zipBuffer.length.toString(),
       },
     });
   } catch (error) {
     console.error("Download error:", error);
-
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to generate download.",
-      },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Failed to create download" }, { status: 500 });
   }
 }

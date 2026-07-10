@@ -1,286 +1,166 @@
 import { getServerSession } from "next-auth";
-import { notFound, redirect } from "next/navigation";
+import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
 
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import DatabaseEditor from "./DatabaseEditor";
 import ExportModal from "./ExportModal";
-import FeaturesEditor from "./FeaturesEditor";
 import RoutesEditor from "./RoutesEditor";
+import FeaturesEditor from "./FeaturesEditor";
+import DatabaseEditor from "./DatabaseEditor";
 import ShangTsung from "./ShangTsung";
 
 export default async function ProjectOverviewPage(props: {
   params: Promise<{ projectId: string }>;
 }) {
   const session = await getServerSession(authOptions);
+  if (!session) redirect("/auth");
 
-  if (!session?.user?.email) {
-    redirect("/auth");
-  }
+  const params = await props.params;
+  const projectId = params.projectId;
 
-  const { projectId } = await props.params;
-
-  const user = await prisma.user.findUnique({
-    where: {
-      email: session.user.email,
-    },
-  });
-
-  if (!user) {
-    redirect("/auth");
-  }
-
-  // Security: only load a project owned by the signed-in user.
-  const project = await prisma.project.findFirst({
-    where: {
-      id: projectId,
-      user_id: user.id,
-    },
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
     include: {
-      routes: {
-        orderBy: {
-          sort_order: "asc",
-        },
-      },
+      routes: { orderBy: { sort_order: "asc" } },
       features: true,
       databaseTables: true,
     },
   });
 
-  if (!project) {
-    notFound();
-  }
+  if (!project) notFound();
 
   const gamePlan = generateGamePlan(project);
 
-  const routesForEditor = project.routes.map((route) => ({
-    ...route,
-    purpose: route.purpose ?? "",
-  }));
-
-  const featuresForEditor = project.features.map((feature) => ({
-    ...feature,
-    priority: feature.priority ?? "Should Have",
-    complexity: feature.complexity ?? "Medium",
-  }));
-
-  const tablesForEditor = project.databaseTables.map((table) => ({
-    ...table,
-    purpose: table.purpose ?? "",
-  }));
-
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      {/* Main navigation bar */}
-      <header className="sticky top-0 z-30 flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 bg-slate-900 px-6 py-4">
-        <div className="flex flex-wrap items-center gap-4">
-          <Link
-            href="/dashboard"
-            className="text-sm text-slate-400 transition hover:text-white"
-          >
+    <main className="min-h-screen bg-slate-950 text-white relative">
+      {/* Top Navigation Bar */}
+      <header className="border-b border-slate-800 bg-slate-900 px-6 py-4 flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <Link href="/dashboard" className="text-sm text-slate-400 hover:text-white">
             &larr; Dashboard
           </Link>
-
-          <div className="h-5 w-px bg-slate-700" />
-
-          <div>
-            <h1 className="font-bold text-white">
-              {project.app_name || "Untitled Project"}
-            </h1>
-
-            <p className="text-xs text-slate-500">
-              Stage 1: Planning
-            </p>
-          </div>
+          <div className="h-4 w-px bg-slate-700" />
+          <h1 className="font-bold text-lg">{project.app_name}</h1>
+          <span className="text-xs text-slate-500 px-2 py-1 rounded bg-slate-800">
+            Stage 1: Planning
+          </span>
         </div>
-
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-3">
           <ExportModal gamePlan={gamePlan} />
-
           <Link
             href={`/builder/${projectId}/forge`}
-            className="rounded-xl bg-emerald-600 px-6 py-3 text-sm font-bold text-white transition hover:bg-emerald-500"
+            className={`rounded-xl px-6 py-3 font-bold transition ${
+              project.routes.length > 0 && project.features.length > 0
+                ? "bg-emerald-600 hover:bg-emerald-500 text-white"
+                : "bg-slate-700 text-slate-400 cursor-not-allowed"
+            }`}
+            onClick={(e) => !(project.routes.length > 0 && project.features.length > 0) && e.preventDefault()}
           >
-            🔨 Enter The Forge &rarr;
+            🔨 Enter The Forge →
           </Link>
         </div>
       </header>
 
-      {/* Planning workspace */}
-      <div className="flex min-h-[calc(100vh-81px)]">
-        {/* Left side: AI planning assistant */}
-        <aside className="w-[380px] flex-shrink-0 border-r border-slate-800 bg-slate-900">
-          <div className="border-b border-slate-800 bg-slate-950 px-4 py-3">
-            <h2 className="font-bold text-orange-400">
-              🥋 Shang Tsung
+      {/* Collapsible Left Panel (Shang Tsung) */}
+      <div
+        className="fixed top-[72px] left-0 h-[calc(100vh-72px)] z-40 transition-all duration-300"
+        id="shang-tsung-panel"
+      >
+        <div className="w-[380px] h-full border-r border-slate-800 bg-slate-900 flex flex-col shadow-2xl">
+          <div className="p-4 border-b border-slate-800 bg-slate-950 flex items-center justify-between">
+            <h2 className="font-bold text-orange-400 flex items-center gap-2">
+              <span>🥋</span> Shang Tsung
             </h2>
-
-            <p className="mt-1 text-xs text-slate-500">
-              Planning and architecture assistant
-            </p>
+            <button
+              onClick={() => {
+                const panel = document.getElementById("shang-tsung-panel");
+                if(panel) panel.style.transform = "translateX(-360px)";
+              }}
+              className="text-slate-400 hover:text-white text-xl leading-none"
+            >
+              &times;
+            </button>
           </div>
-
-          <div className="h-[calc(100vh-145px)]">
-            <ShangTsung
-              projectId={projectId}
-              embedded={true}
-            />
+          <div className="flex-1 overflow-hidden">
+            {/* FIXED: Removed embedded={true} */}
+            <ShangTsung projectId={projectId} />
           </div>
-        </aside>
-
-        {/* Right side: project architecture */}
-        <section className="min-w-0 flex-1 overflow-y-auto p-6">
-          <div className="mx-auto max-w-6xl">
-            {/* Project summary */}
-            <div className="mb-6 rounded-2xl border border-slate-800 bg-slate-900 p-6">
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-wider text-emerald-400">
-                    Planning Stage
-                  </p>
-
-                  <h2 className="mt-2 text-3xl font-bold">
-                    {project.app_name || "Untitled Project"}
-                  </h2>
-
-                  <p className="mt-3 max-w-3xl text-slate-400">
-                    {project.app_description ||
-                      "No project description has been added yet."}
-                  </p>
-                </div>
-
-                <div className="rounded-xl border border-emerald-800 bg-emerald-950/40 px-4 py-3 text-right">
-                  <p className="text-sm font-bold text-emerald-400">
-                    Ready for Stage 2
-                  </p>
-
-                  <p className="mt-1 text-xs text-slate-400">
-                    Enter The Forge to generate code.
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-6 flex flex-wrap gap-3 text-sm">
-                <span className="rounded-full border border-blue-800 bg-blue-950/40 px-3 py-1 text-blue-300">
-                  {project.routes.length} Pages
-                </span>
-
-                <span className="rounded-full border border-purple-800 bg-purple-950/40 px-3 py-1 text-purple-300">
-                  {project.features.length} Features
-                </span>
-
-                <span className="rounded-full border border-emerald-800 bg-emerald-950/40 px-3 py-1 text-emerald-300">
-                  {project.databaseTables.length} Tables
-                </span>
-              </div>
-            </div>
-
-            {/* Editable architecture sections */}
-            <div className="grid gap-6">
-              <RoutesEditor
-                projectId={projectId}
-                initialRoutes={routesForEditor}
-              />
-
-              <FeaturesEditor
-                projectId={projectId}
-                initialFeatures={featuresForEditor}
-              />
-
-              <DatabaseEditor
-                projectId={projectId}
-                initialTables={tablesForEditor}
-              />
-            </div>
-
-            <div className="h-20" />
-          </div>
-        </section>
+        </div>
       </div>
+
+      {/* Slide-In Button */}
+      <button
+        onClick={() => {
+          const panel = document.getElementById("shang-tsung-panel");
+          if(panel) panel.style.transform = "translateX(0)";
+        }}
+        className="fixed bottom-6 left-6 z-50 flex items-center gap-2 rounded-full bg-orange-600 px-5 py-3 font-semibold text-white shadow-2xl hover:bg-orange-500 transition"
+      >
+        🥋
+      </button>
+
+      {/* Main Content */}
+      <section className="ml-0 transition-all duration-300" id="main-content">
+        <div className="p-6 bg-slate-950 min-h-[calc(100vh-72px)]">
+          {/* Project Header */}
+          <div className="mb-6 p-6 rounded-2xl border border-slate-800 bg-slate-900">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-bold mb-2">{project.app_name}</h2>
+                <p className="text-slate-400 mb-4">{project.app_description}</p>
+              </div>
+              {project.routes.length > 0 && project.features.length > 0 ? (
+                <div className="text-right">
+                  <p className="text-xs text-emerald-400 font-semibold mb-1">✓ READY TO BUILD</p>
+                  <p className="text-xs text-slate-500">Click "Enter The Forge" above</p>
+                </div>
+              ) : (
+                <div className="text-right">
+                  <p className="text-xs text-yellow-400 font-semibold mb-1">⚠ NEEDS MORE PLANNING</p>
+                  <p className="text-xs text-slate-500">Add routes and features first</p>
+                </div>
+              )}
+            </div>
+            <div className="flex gap-4 text-sm">
+              <span className="px-3 py-1 rounded-full bg-blue-900/30 text-blue-400 border border-blue-800">
+                {project.routes.length} Pages
+              </span>
+              <span className="px-3 py-1 rounded-full bg-purple-900/30 text-purple-400 border border-purple-800">
+                {project.features.length} Features
+              </span>
+              <span className="px-3 py-1 rounded-full bg-emerald-900/30 text-emerald-400 border border-emerald-800">
+                {project.databaseTables.length} Tables
+              </span>
+            </div>
+          </div>
+
+          {/* Editors */}
+          <div className="grid gap-6">
+            <RoutesEditor projectId={projectId} initialRoutes={project.routes} />
+            <FeaturesEditor projectId={projectId} initialFeatures={project.features} />
+            <DatabaseEditor projectId={projectId} initialTables={project.databaseTables} />
+          </div>
+
+          <div className="h-20" />
+        </div>
+      </section>
     </main>
   );
 }
 
-function generateGamePlan(project: {
-  app_name: string | null;
-  app_description: string | null;
-  target_users: string | null;
-  routes: Array<{
-    page_name: string;
-    route_path: string;
-    purpose: string | null;
-  }>;
-  features: Array<{
-    feature_name: string;
-    priority: string | null;
-  }>;
-  databaseTables: Array<{
-    table_name: string;
-    purpose: string | null;
-  }>;
-}) {
-  const routesText =
-    project.routes.length > 0
-      ? project.routes
-          .map(
-            (route) =>
-              `- ${route.page_name} (${route.route_path}) — ${
-                route.purpose || "General application page"
-              }`
-          )
-          .join("\n")
-      : "- No routes have been defined.";
+function generateGamePlan(project: any): string {
+  const routesText = project.routes?.length
+    ? project.routes.map((r: any) => `- ${r.page_name} (${r.route_path}) -> ${r.purpose || "General page"}`).join("\n")
+    : "- (No routes yet)";
 
-  const featuresText =
-    project.features.length > 0
-      ? project.features
-          .map(
-            (feature) =>
-              `- ${feature.feature_name} [${
-                feature.priority || "Should Have"
-              }]`
-          )
-          .join("\n")
-      : "- No features have been defined.";
+  const featuresText = project.features?.length
+    ? project.features.map((f: any) => `- ${f.feature_name} [${f.priority || "Standard"}]`).join("\n")
+    : "- (No features yet)";
 
-  const databaseText =
-    project.databaseTables.length > 0
-      ? project.databaseTables
-          .map(
-            (table) =>
-              `- ${table.table_name}: ${
-                table.purpose || "Stores application data"
-              }`
-          )
-          .join("\n")
-      : "- No database tables have been defined.";
+  const databaseText = project.databaseTables?.length
+    ? project.databaseTables.map((t: any) => `- ${t.table_name}: ${t.purpose || "Stores app data"}`).join("\n")
+    : "- (No tables yet)";
 
-  return `
-APP NAME:
-${project.app_name || "Untitled App"}
-
-APP PURPOSE:
-${project.app_description || "Not specified"}
-
-TARGET USERS:
-${project.target_users || "Not specified"}
-
-STAGE 1 — PLANNING
-
-ROUTES:
-${routesText}
-
-FEATURES:
-${featuresText}
-
-DATABASE:
-${databaseText}
-
-STAGE 2 — BUILDING
-
-The approved planning architecture must now be transformed into application files, working pages, reusable components, and a live preview inside The Forge.
-
-Generated by App Builder Studio.
-`.trim();
+  return `APP NAME: ${project.app_name}\n\nPURPOSE: ${project.app_description}\n\nROUTES:\n${routesText}\n\nFEATURES:\n${featuresText}\n\nDATABASE:\n${databaseText}`;
 }

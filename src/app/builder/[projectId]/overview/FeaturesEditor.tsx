@@ -5,8 +5,8 @@ import { useState } from "react";
 interface Feature {
   id: string;
   feature_name: string;
-  priority: string;
-  complexity: string;
+  priority: string | null;
+  complexity: string | null;
 }
 
 export default function FeaturesEditor({
@@ -200,7 +200,7 @@ export default function FeaturesEditor({
               <div>
                 <p className="text-white font-medium">{feature.feature_name}</p>
                 <p className="text-xs text-slate-500 mt-1">
-                  {feature.priority} • {feature.complexity}
+                  {feature.priority || "Should Have"} • {feature.complexity || "Medium"}
                 </p>
                 <div className="flex gap-2 mt-2">
                   <button onClick={() => handleEdit(feature)} className="text-xs text-blue-400">Edit</button>
