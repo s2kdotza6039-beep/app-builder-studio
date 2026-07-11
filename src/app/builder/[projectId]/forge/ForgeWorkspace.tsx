@@ -1,60 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import ShangTsung from "./ShangTsung";
 
 interface ProjectFile {
   id: string;
-  project_id: string;
   file_path: string;
   content: string;
   language: string;
-  created_at: string | Date;
-  updated_at: string | Date;
-}
-
-interface ForgeResponse {
-  success?: boolean;
-  filesGenerated?: number;
-  files?: ProjectFile[];
-  error?: string;
-}
-
-type Notice = {
-  type: "success" | "error";
-  text: string;
-} | null;
-
-async function readForgeResponse(
-  response: Response
-): Promise<ForgeResponse> {
-  const responseText = await response.text();
-
-  if (!responseText) {
-    throw new Error(
-      `The Forge returned an empty response. HTTP status: ${response.status}.`
-    );
-  }
-
-  try {
-    return JSON.parse(responseText) as ForgeResponse;
-  } catch {
-    console.error("Non-JSON Forge response:", responseText);
-    throw new Error(
-      `The Forge returned HTML instead of JSON. HTTP status: ${response.status}.`
-    );
-  }
-}
-
-function createDownloadName(projectName: string) {
-  const safeName = projectName
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "-")
-    .replace(/[^a-z0-9-]/g, "")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-
-  return `${safeName || "my-app"}.zip`;
 }
 
 export default function ForgeWorkspace({
@@ -66,317 +19,199 @@ export default function ForgeWorkspace({
   projectName: string;
   initialFiles: ProjectFile[];
 }) {
-  const [files, setFiles] = useState<ProjectFile[]>(
-    initialFiles || []
+  const [files, setFiles] = useState<ProjectFile[]>(initialFiles || []);
+  const [selectedFile, setSelectedFile] = useState<ProjectFile | null>(
+    initialFiles?.[0] || null
   );
-  const [selectedFile, setSelectedFile] =
-    useState<ProjectFile | null>(initialFiles?.[0] || null);
   const [generating, setGenerating] = useState(false);
   const [downloading, setDownloading] = useState(false);
-  const [notice, setNotice] = useState<Notice>(null);
+  const [notice, setNotice] = useState<string>("");
   const [previewKey, setPreviewKey] = useState(0);
-  const [viewMode, setViewMode] = useState<"preview" | "code">(
-    "preview"
-  );
+  const [showShangTsung, setShowShangTsung] = useState(true);
 
-  async function handleGenerate() {
-    if (generating) return;
-
+  const handleGenerate = async () => {
     setGenerating(true);
-    setNotice(null);
+    setNotice("");
 
     try {
-      const response = await fetch(
-        `/api/projects/${projectId}/forge-api`,
-        {
-          method: "POST",
-          headers: { Accept: "application/json" },
-        }
-      );
-
-      const data = await readForgeResponse(response);
-
-      if (!response.ok) {
-        throw new Error(
-          data.error ||
-            `Code generation failed with HTTP status ${response.status}.`
-        );
-      }
-
-      if (!Array.isArray(data.files)) {
-        throw new Error(
-          "The Forge did not return a valid file list."
-        );
-      }
-
-      setFiles(data.files);
-      setSelectedFile(data.files[0] || null);
-      setPreviewKey((k) => k + 1); // refresh the live preview
-      setViewMode("preview");
-
-      setNotice({
-        type: "success",
-        text: `Generated ${
-          data.filesGenerated ?? data.files.length
-        } files successfully.`,
+      const res = await fetch(`/api/projects/${projectId}/forge-api`, {
+        method: "POST",
       });
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : "Code generation failed.";
-      console.error("Forge generation error:", error);
-      setNotice({ type: "error", text: errorMessage });
+
+      const data = await res.json();
+
+      if (!res.ok) throw new Error(data.error || "Generation failed");
+
+      setFiles(data.files || []);
+      setSelectedFile((data.files || [])[0] || null);
+      setPreviewKey((k) => k + 1);
+      setNotice(`Generated ${data.filesGenerated || 0} files successfully.`);
+    } catch (err: any) {
+      setNotice("Error: " + err.message);
     } finally {
       setGenerating(false);
     }
-  }
+  };
 
-  async function handleDownload() {
+  const handleDownload = async () => {
     if (downloading || files.length === 0) return;
 
     setDownloading(true);
-    setNotice(null);
+    setNotice("");
 
     try {
-      const response = await fetch(
-        `/api/projects/${projectId}/download`,
-        {
-          method: "GET",
-          headers: { Accept: "application/zip" },
-        }
-      );
+      const res = await fetch(`/api/projects/${projectId}/download-api`);
 
-      if (!response.ok) {
-        const responseText = await response.text();
-        let errorMessage = "Project download failed.";
-        try {
-          const errorData = JSON.parse(responseText);
-          errorMessage = errorData.error || errorMessage;
-        } catch {
-          if (responseText) {
-            console.error("Non-JSON download error:", responseText);
-          }
-        }
-        throw new Error(errorMessage);
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Download failed");
       }
 
-      const zipBlob = await response.blob();
-      const downloadUrl = window.URL.createObjectURL(zipBlob);
-      const downloadLink = document.createElement("a");
-      downloadLink.href = downloadUrl;
-      downloadLink.download = createDownloadName(projectName);
-      document.body.appendChild(downloadLink);
-      downloadLink.click();
-      downloadLink.remove();
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${projectName.toLowerCase().replace(/\s+/g, "-")}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
 
-      window.setTimeout(() => {
-        window.URL.revokeObjectURL(downloadUrl);
-      }, 1000);
-
-      setNotice({
-        type: "success",
-        text: "Project downloaded successfully.",
-      });
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : "Project download failed.";
-      console.error("Download error:", error);
-      setNotice({ type: "error", text: errorMessage });
+      setNotice("Project downloaded successfully.");
+    } catch (err: any) {
+      setNotice("Download error: " + err.message);
     } finally {
       setDownloading(false);
     }
-  }
-
-  function getFileIcon(filePath: string) {
-    if (filePath.endsWith(".tsx")) return "📄";
-    if (filePath.endsWith(".ts")) return "📘";
-    if (filePath.endsWith(".json")) return "📋";
-    if (filePath.endsWith(".md")) return "📝";
-    if (filePath.endsWith(".css")) return "🎨";
-    return "📎";
-  }
-
-  const hasFiles = files.length > 0;
+  };
 
   return (
-    <div className="flex h-full min-h-0">
-      {/* File Explorer */}
-      <aside className="flex w-[280px] shrink-0 flex-col border-r border-slate-800 bg-slate-900">
-        <div className="border-b border-slate-800 bg-slate-950 p-4">
-          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-            File Explorer
-          </p>
-          <h2 className="mt-1 truncate text-sm font-bold text-white">
-            {projectName}
-          </h2>
-        </div>
-
-        <div className="space-y-2 border-b border-slate-800 p-3">
+    <div className="flex h-full min-h-0 bg-slate-950">
+      {/* LEFT: Shang Tsung Panel (Collapsible) */}
+      <div
+        className={`border-r border-slate-800 bg-slate-900 transition-all duration-300 flex flex-col ${
+          showShangTsung ? "w-96" : "w-0 overflow-hidden"
+        }`}
+      >
+        <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950 px-4 py-3">
+          <div className="font-bold text-orange-400 flex items-center gap-2">
+            <span>🥋</span> Shang Tsung
+          </div>
           <button
-            type="button"
-            onClick={handleGenerate}
-            disabled={generating}
-            className="w-full rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={() => setShowShangTsung(!showShangTsung)}
+            className="text-slate-400 hover:text-white text-xl"
           >
-            {generating ? "Generating Code..." : "🔨 Generate Code"}
+            {showShangTsung ? "→" : "←"}
           </button>
-
-          <button
-            type="button"
-            onClick={handleDownload}
-            disabled={downloading || !hasFiles}
-            className="w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {downloading ? "Preparing ZIP..." : "📦 Download Project"}
-          </button>
-
-          {notice && (
-            <div
-              className={[
-                "rounded-lg border p-3 text-xs",
-                notice.type === "success"
-                  ? "border-emerald-800 bg-emerald-950/40 text-emerald-300"
-                  : "border-red-800 bg-red-950/40 text-red-300",
-              ].join(" ")}
-            >
-              {notice.text}
-            </div>
-          )}
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-2">
-          {!hasFiles ? (
-            <div className="rounded-xl border border-dashed border-slate-700 p-4 text-center">
-              <p className="text-sm text-slate-500">
-                No generated files.
-              </p>
-              <p className="mt-2 text-xs text-slate-600">
-                Generate the approved project plan.
-              </p>
-            </div>
-          ) : (
-            <ul className="space-y-1">
-              {files.map((file) => (
-                <li key={file.id}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedFile(file);
-                      setViewMode("code");
-                    }}
-                    className={[
-                      "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition",
-                      selectedFile?.id === file.id &&
-                      viewMode === "code"
-                        ? "border border-orange-800 bg-orange-950/40 text-orange-300"
-                        : "text-slate-400 hover:bg-slate-800 hover:text-white",
-                    ].join(" ")}
-                  >
-                    <span>{getFileIcon(file.file_path)}</span>
-                    <span className="truncate font-mono text-xs">
-                      {file.file_path}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        {showShangTsung && (
+          <div className="flex-1 overflow-hidden">
+            <ShangTsung projectId={projectId} />
+          </div>
+        )}
+      </div>
 
-        <div className="border-t border-slate-800 p-3 text-center text-xs text-slate-600">
-          {files.length} generated{" "}
-          {files.length === 1 ? "file" : "files"}
-        </div>
-      </aside>
-
-      {/* Main Area: Preview or Code */}
-      <section className="flex min-w-0 flex-1 flex-col bg-slate-950">
-        {/* Toggle Bar */}
-        <div className="flex h-12 items-center justify-between border-b border-slate-800 bg-slate-900 px-4">
-          <div className="flex items-center gap-2">
+      {/* RIGHT: Main Workspace */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Top Bar */}
+        <div className="h-12 border-b border-slate-800 bg-slate-900 flex items-center px-4 justify-between flex-shrink-0">
+          <div className="flex items-center gap-4">
             <button
-              type="button"
-              onClick={() => setViewMode("preview")}
-              className={[
-                "rounded-lg px-4 py-1.5 text-xs font-semibold transition",
-                viewMode === "preview"
-                  ? "bg-orange-600 text-white"
-                  : "text-slate-400 hover:bg-slate-800 hover:text-white",
-              ].join(" ")}
+              onClick={() => setShowShangTsung(!showShangTsung)}
+              className="text-sm text-slate-400 hover:text-white"
             >
-              👁 Live Preview
+              {showShangTsung ? "Hide Shang Tsung" : "Show Shang Tsung"}
             </button>
-            <button
-              type="button"
-              onClick={() => setViewMode("code")}
-              className={[
-                "rounded-lg px-4 py-1.5 text-xs font-semibold transition",
-                viewMode === "code"
-                  ? "bg-orange-600 text-white"
-                  : "text-slate-400 hover:bg-slate-800 hover:text-white",
-              ].join(" ")}
-            >
-              {"</>"} Code
-            </button>
+            <span className="text-xs text-slate-500">•</span>
+            <span className="text-sm font-medium">{projectName}</span>
           </div>
 
-          {viewMode === "preview" && hasFiles && (
+          <div className="flex items-center gap-3">
             <button
-              type="button"
-              onClick={() => setPreviewKey((k) => k + 1)}
-              className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-400 transition hover:bg-slate-800 hover:text-white"
+              onClick={handleGenerate}
+              disabled={generating}
+              className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50"
             >
-              🔄 Refresh
+              {generating ? "Generating..." : "Generate Code"}
             </button>
-          )}
 
-          {viewMode === "code" && selectedFile && (
-            <span className="truncate font-mono text-xs text-slate-500">
-              {selectedFile.file_path}
-            </span>
-          )}
+            <button
+              onClick={handleDownload}
+              disabled={downloading || files.length === 0}
+              className="rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-semibold hover:bg-blue-500 disabled:opacity-50"
+            >
+              {downloading ? "Downloading..." : "Download ZIP"}
+            </button>
+          </div>
         </div>
 
-        {/* Content */}
-        <div className="min-h-0 flex-1 overflow-hidden">
-          {viewMode === "preview" ? (
-            hasFiles ? (
-              <iframe
-                key={previewKey}
-                src={`/api/projects/${projectId}/preview`}
-                title="Live Preview"
-                className="h-full w-full border-0 bg-white"
-                sandbox="allow-scripts"
-              />
-            ) : (
-              <div className="flex h-full items-center justify-center text-center">
-                <div>
-                  <p className="mb-2 text-lg text-slate-500">
-                    No Preview Yet
-                  </p>
-                  <p className="text-sm text-slate-600">
-                    Click Generate Code to build your app,
-                    then see it live here.
-                  </p>
-                </div>
+        {/* Main Content Area */}
+        <div className="flex-1 flex overflow-hidden">
+          {/* File Explorer */}
+          <div className="w-72 border-r border-slate-800 bg-slate-900 overflow-y-auto">
+            <div className="p-4 border-b border-slate-800 bg-slate-950">
+              <p className="uppercase text-xs tracking-widest text-slate-500 font-semibold">Files</p>
+            </div>
+
+            {files.length === 0 ? (
+              <div className="p-8 text-center text-slate-500 text-sm">
+                No files yet.<br />Click "Generate Code"
               </div>
-            )
-          ) : selectedFile ? (
-            <div className="h-full overflow-auto p-6">
-              <pre className="whitespace-pre-wrap break-words rounded-2xl border border-slate-800 bg-slate-900 p-5 font-mono text-sm leading-6 text-slate-300">
-                <code>{selectedFile.content}</code>
-              </pre>
+            ) : (
+              <div className="p-2">
+                {files.map((file) => (
+                  <button
+                    key={file.id}
+                    onClick={() => setSelectedFile(file)}
+                    className={`w-full text-left px-3 py-2 text-sm rounded-lg mb-1 transition ${
+                      selectedFile?.id === file.id
+                        ? "bg-orange-900 text-orange-200"
+                        : "hover:bg-slate-800 text-slate-300"
+                    }`}
+                  >
+                    {file.file_path}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Code / Preview Area */}
+          <div className="flex-1 flex flex-col">
+            {selectedFile ? (
+              <div className="flex-1 overflow-auto p-6 font-mono text-sm bg-slate-950 text-slate-200 whitespace-pre-wrap">
+                {selectedFile.content}
+              </div>
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-slate-500">
+                Select a file from the explorer
+              </div>
+            )}
+          </div>
+
+          {/* Live Preview */}
+          <div className="w-2/5 border-l border-slate-800 bg-white overflow-hidden flex flex-col">
+            <div className="bg-slate-100 border-b border-slate-200 px-4 py-2 text-xs font-medium text-slate-500 flex items-center justify-between">
+              <span>Live Preview — {projectName}</span>
+              <button
+                onClick={() => setPreviewKey((k) => k + 1)}
+                className="text-[10px] text-blue-600 hover:text-blue-700"
+              >
+                REFRESH
+              </button>
             </div>
-          ) : (
-            <div className="flex h-full items-center justify-center text-sm text-slate-500">
-              Select a file to view its code.
-            </div>
-          )}
+
+            <iframe
+              key={previewKey}
+              src={`/api/projects/${projectId}/preview`}
+              className="flex-1 border-0"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation"
+              title="Live Preview"
+            />
+          </div>
         </div>
-      </section>
+      </div>
     </div>
   );
 }

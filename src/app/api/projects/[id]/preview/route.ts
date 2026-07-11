@@ -6,7 +6,7 @@ import { generatePreviewHTML } from "@/services/previewGenerator";
 export const runtime = "nodejs";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -26,10 +26,9 @@ export async function GET(
 
     const { id: projectId } = await context.params;
 
-    const founderEmail =
-      process.env.FOUNDER_EMAIL?.trim().toLowerCase() || "";
-    const currentEmail =
-      currentUser.email?.trim().toLowerCase() || "";
+    // Detect if current email belongs to the admin/founder bypass role
+    const founderEmail = process.env.FOUNDER_EMAIL?.trim().toLowerCase() || "";
+    const currentEmail = currentUser.email?.trim().toLowerCase() || "";
 
     const canAccessAnyProject =
       currentUser.role === "ADMIN" ||
@@ -42,6 +41,7 @@ export async function GET(
       include: {
         routes: { orderBy: { sort_order: "asc" } },
         features: true,
+        databaseTables: true, // Required for dashboard preview table stats
       },
     });
 
@@ -49,13 +49,20 @@ export async function GET(
       return new Response("Project not found", { status: 404 });
     }
 
-    const html = generatePreviewHTML({
-      appName: project.app_name || "My App",
-      appDescription:
-        project.app_description || "An amazing application.",
-      routes: project.routes,
-      features: project.features,
-    });
+    // Read the dynamic preview path parameter: ?path=/dashboard etc.
+    const { searchParams } = new URL(request.url);
+    const currentPath = searchParams.get("path") || "/";
+
+    const html = generatePreviewHTML(
+      {
+        appName: project.app_name || "My App",
+        appDescription: project.app_description || "An amazing application.",
+        routes: project.routes,
+        features: project.features,
+        databaseTables: project.databaseTables,
+      },
+      currentPath
+    );
 
     return new Response(html, {
       status: 200,
