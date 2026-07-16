@@ -11,61 +11,74 @@ export async function GET(
 ) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user?.email) return new Response("Unauthorized", { status: 401 });
 
-    const currentUser = await prisma.user.findUnique({ where: { email: session.user.email } });
-    if (!currentUser) return new Response("User not found", { status: 404 });
+    if (!session?.user?.email) {
+      return new Response("Unauthorized", { status: 401 });
+    }
 
-    const { id: projectId } = await context.params;
-    const founderEmail = process.env.FOUNDER_EMAIL?.trim().toLowerCase() || "";
-    const currentEmail = currentUser.email?.trim().toLowerCase() || "";
-    const canAccessAnyProject = currentUser.role === "ADMIN" || (founderEmail !== "" && currentEmail === founderEmail);
-
-    const project = await prisma.project.findFirst({
-      where: canAccessAnyProject ? { id: projectId } : { id: projectId, user_id: currentUser.id },
-      include: { routes: { orderBy: { sort_order: "asc" } }, features: true, databaseTables: true },
+    const currentUser = await prisma.user.findUnique({
+      where: { email: session.user.email },
     });
 
-    if (!project) return new Response("Project not found", { status: 404 });
+    if (!currentUser) {
+      return new Response("User not found", { status: 404 });
+    }
 
+    const { id: projectId } = await context.params;
+
+    const founderEmail = process.env.FOUNDER_EMAIL?.trim().toLowerCase() || "";
+    const currentEmail = currentUser.email?.trim().toLowerCase() || "";
+    const canAccessAnyProject =
+      currentUser.role === "ADMIN" ||
+      (founderEmail !== "" && currentEmail === founderEmail);
+
+    // Load project with planning data AND generated files
+    const project = await prisma.project.findFirst({
+      where: canAccessAnyProject
+        ? { id: projectId }
+        : { id: projectId, user_id: currentUser.id },
+      include: {
+        routes: { orderBy: { sort_order: "asc" } },
+        features: true,
+        databaseTables: true,
+        // Load generated files for Preview V2
+        files: { orderBy: { file_path: "asc" } },
+      },
+    });
+
+    if (!project) {
+      return new Response("Project not found", { status: 404 });
+    }
+
+    // Read the target route from the query string
     const { searchParams } = new URL(request.url);
     const currentPath = searchParams.get("path") || "/";
 
+    // Generate the preview HTML
+    // If generated files exist → Preview V2 (renders actual code)
+    // If no generated files yet → Preview V1 (planning-based)
     const html = generatePreviewHTML(
       {
         appName: project.app_name || "My App",
-        appDescription: project.app_description || "An amazing application.",
+        appDescription:
+          project.app_description || "An amazing application.",
         routes: project.routes,
         features: project.features,
         databaseTables: project.databaseTables,
       },
-      currentPath
+      currentPath,
+      project.files // ← NEW: Pass generated files to the preview generator
     );
 
-    // Inject JavaScript into the preview so links send a message to the parent
-    const navigationScript = `
-<script>
-document.addEventListener('click', function(e) {
-  var target = e.target.closest('a');
-  if (target && target.href && target.href.includes('path=')) {
-    e.preventDefault();
-    var url = new URL(target.href);
-    var path = url.searchParams.get('path');
-    if (path) {
-      window.parent.postMessage({ type: 'navigate', path: path }, '*');
-    }
-  }
-});
-</script>`;
-
-    const finalHtml = html.replace("</body>", `${navigationScript}\n</body>`);
-
-    return new Response(finalHtml, {
+    return new Response(html, {
       status: 200,
-      headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+      },
     });
   } catch (error) {
-    console.error("Preview error:", error);
+    console.error("Preview V2 error:", error);
     return new Response("Preview generation failed", { status: 500 });
   }
 }
