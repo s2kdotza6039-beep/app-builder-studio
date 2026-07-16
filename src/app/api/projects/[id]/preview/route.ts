@@ -11,45 +11,23 @@ export async function GET(
 ) {
   try {
     const session = await getServerSession(authOptions);
+    if (!session?.user?.email) return new Response("Unauthorized", { status: 401 });
 
-    if (!session?.user?.email) {
-      return new Response("Unauthorized", { status: 401 });
-    }
-
-    const currentUser = await prisma.user.findUnique({
-      where: { email: session.user.email },
-    });
-
-    if (!currentUser) {
-      return new Response("User not found", { status: 404 });
-    }
+    const currentUser = await prisma.user.findUnique({ where: { email: session.user.email } });
+    if (!currentUser) return new Response("User not found", { status: 404 });
 
     const { id: projectId } = await context.params;
-
-    // Detect if current email belongs to the admin/founder bypass role
     const founderEmail = process.env.FOUNDER_EMAIL?.trim().toLowerCase() || "";
     const currentEmail = currentUser.email?.trim().toLowerCase() || "";
-
-    const canAccessAnyProject =
-      currentUser.role === "ADMIN" ||
-      (founderEmail !== "" && currentEmail === founderEmail);
+    const canAccessAnyProject = currentUser.role === "ADMIN" || (founderEmail !== "" && currentEmail === founderEmail);
 
     const project = await prisma.project.findFirst({
-      where: canAccessAnyProject
-        ? { id: projectId }
-        : { id: projectId, user_id: currentUser.id },
-      include: {
-        routes: { orderBy: { sort_order: "asc" } },
-        features: true,
-        databaseTables: true, // Required for dashboard preview table stats
-      },
+      where: canAccessAnyProject ? { id: projectId } : { id: projectId, user_id: currentUser.id },
+      include: { routes: { orderBy: { sort_order: "asc" } }, features: true, databaseTables: true },
     });
 
-    if (!project) {
-      return new Response("Project not found", { status: 404 });
-    }
+    if (!project) return new Response("Project not found", { status: 404 });
 
-    // Read the dynamic preview path parameter: ?path=/dashboard etc.
     const { searchParams } = new URL(request.url);
     const currentPath = searchParams.get("path") || "/";
 
@@ -64,17 +42,30 @@ export async function GET(
       currentPath
     );
 
-    return new Response(html, {
+    // Inject JavaScript into the preview so links send a message to the parent
+    const navigationScript = `
+<script>
+document.addEventListener('click', function(e) {
+  var target = e.target.closest('a');
+  if (target && target.href && target.href.includes('path=')) {
+    e.preventDefault();
+    var url = new URL(target.href);
+    var path = url.searchParams.get('path');
+    if (path) {
+      window.parent.postMessage({ type: 'navigate', path: path }, '*');
+    }
+  }
+});
+</script>`;
+
+    const finalHtml = html.replace("</body>", `${navigationScript}\n</body>`);
+
+    return new Response(finalHtml, {
       status: 200,
-      headers: {
-        "Content-Type": "text/html; charset=utf-8",
-        "Cache-Control": "no-store",
-      },
+      headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
     });
   } catch (error) {
     console.error("Preview error:", error);
-    return new Response("Preview generation failed", {
-      status: 500,
-    });
+    return new Response("Preview generation failed", { status: 500 });
   }
 }
