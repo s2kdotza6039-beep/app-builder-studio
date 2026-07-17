@@ -1,32 +1,27 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useRef, useEffect } from "react";
 
 interface Message {
-  id?: string;
   role: "user" | "assistant";
   message: string;
 }
 
-const welcomeMessage: Message = {
-  role: "assistant",
-  message:
-    `I am Shang Tsung — your Game Plan Architect.\n\n` +
-    `Tell me what you want to build.\n\n` +
-    `Examples:\n` +
-    `• Add a payment feature\n` +
-    `• Create a profile page\n` +
-    `• Add an orders table\n` +
-    `• Give me a project summary\n` +
-    `• Suggest improvements`,
-};
+interface SuggestionChip {
+  label: string;
+  message: string;
+  icon: string;
+}
 
-const quickCommands = [
-  "Give me a summary",
-  "Suggest improvements",
-  "Add a profile page",
-  "Add a payment feature",
+const PLANNING_CHIPS: SuggestionChip[] = [
+  { icon: "💡", label: "What is missing?", message: "What is missing from this app? What should I add?" },
+  { icon: "🔐", label: "Add authentication", message: "Add a user authentication feature" },
+  { icon: "📋", label: "Suggest improvements", message: "Suggest improvements for this app" },
+  { icon: "💰", label: "Add payments", message: "Add a payment feature" },
+  { icon: "📊", label: "Add analytics", message: "Add an analytics dashboard feature" },
+  { icon: "🔔", label: "Add notifications", message: "Add a notifications system" },
+  { icon: "📱", label: "Add mobile routes", message: "Add mobile-friendly routes" },
+  { icon: "🗄️", label: "Review database", message: "Review the database structure and suggest improvements" },
 ];
 
 export default function ShangTsung({
@@ -34,255 +29,104 @@ export default function ShangTsung({
 }: {
   projectId: string;
 }) {
-  const router = useRouter();
-
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>([
+    {
+      role: "assistant",
+      message: `I am Shang Tsung — your Planning Architect.\n\nTell me what to add, remove, or improve. Or tap a suggestion below.`,
+    },
+  ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [loadingHistory, setLoadingHistory] = useState(true);
-  const [error, setError] = useState("");
-
+  const [showAllChips, setShowAllChips] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    let active = true;
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
-    async function loadHistory() {
-      try {
-        const response = await fetch(
-          `/api/projects/${projectId}/chat`,
-          {
-            method: "GET",
-            cache: "no-store",
-          }
-        );
+  const visibleChips = showAllChips ? PLANNING_CHIPS : PLANNING_CHIPS.slice(0, 4);
 
-        const rawText = await response.text();
-
-        let data: {
-          messages?: Array<{
-            id?: string;
-            role?: string;
-            message?: string;
-          }>;
-          error?: string;
-        } = {};
-
-        if (rawText) {
-          data = JSON.parse(rawText);
-        }
-
-        if (!response.ok) {
-          throw new Error(data.error || "Failed to load chat history.");
-        }
-
-        const savedMessages: Message[] = (data.messages || [])
-          .filter((item) => item?.message)
-          .map((item) => ({
-            id: item.id,
-            role: item.role === "user" ? "user" : "assistant",
-            message: item.message || "",
-          }));
-
-        if (active) {
-          setMessages(
-            savedMessages.length > 0
-              ? savedMessages
-              : [welcomeMessage]
-          );
-        }
-      } catch (loadError) {
-        const message =
-          loadError instanceof Error
-            ? loadError.message
-            : "Could not load chat history.";
-
-        if (active) {
-          setMessages([welcomeMessage]);
-          setError(message);
-        }
-      } finally {
-        if (active) {
-          setLoadingHistory(false);
-        }
-      }
-    }
-
-    loadHistory();
-
-    return () => {
-      active = false;
-    };
-  }, [projectId]);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({
-      behavior: "smooth",
-    });
-  }, [messages, loading]);
-
-  async function sendMessage(command?: string) {
-    const userMessage = (command || input).trim();
-
-    if (!userMessage || loading) {
-      return;
-    }
+  const handleSend = async (messageText?: string) => {
+    const textToSend = messageText || input.trim();
+    if (!textToSend || loading) return;
 
     setInput("");
-    setError("");
+    setMessages((prev) => [...prev, { role: "user", message: textToSend }]);
     setLoading(true);
 
-    setMessages((current) => [
-      ...current,
-      {
-        role: "user",
-        message: userMessage,
-      },
-    ]);
-
     try {
-      const response = await fetch(
-        `/api/projects/${projectId}/chat`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            message: userMessage,
-          }),
-        }
-      );
+      const res = await fetch(`/api/projects/${projectId}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: textToSend }),
+      });
 
-      const rawText = await response.text();
+      const data = await res.json();
 
-      let data: {
-        reply?: string;
-        action?: unknown;
-        error?: string;
-      } = {};
-
-      if (rawText) {
-        data = JSON.parse(rawText);
-      }
-
-      if (!response.ok) {
-        throw new Error(
-          data.error || "Shang Tsung could not complete the request."
-        );
-      }
-
-      setMessages((current) => [
-        ...current,
-        {
-          role: "assistant",
-          message:
-            data.reply ||
-            "The request was completed, but no written response was returned.",
-        },
-      ]);
-
-      if (data.action) {
-        setMessages((current) => [
-          ...current,
-          {
-            role: "assistant",
-            message:
-              "✅ The project has been updated. The Architecture Preview is refreshing.",
-          },
+      if (data.reply) {
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", message: data.reply },
         ]);
 
-        window.setTimeout(() => {
-          router.refresh();
-        }, 500);
+        if (data.action) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              message: "✅ Done. Scroll up to see the update, or refresh the page to see the full changes.",
+            },
+          ]);
+          setTimeout(() => window.location.reload(), 1500);
+        }
       }
-    } catch (sendError) {
-      const message =
-        sendError instanceof Error
-          ? sendError.message
-          : "Something went wrong.";
-
-      setError(message);
-
-      setMessages((current) => [
-        ...current,
-        {
-          role: "assistant",
-          message: `I could not complete that request: ${message}`,
-        },
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", message: "Something went wrong. Please try again." },
       ]);
     } finally {
       setLoading(false);
     }
-  }
+  };
 
-  function handleKeyDown(
-    event: React.KeyboardEvent<HTMLTextAreaElement>
-  ) {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      sendMessage();
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
     }
-  }
+  };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-slate-900">
-      {/* Quick commands */}
-      <div className="border-b border-slate-800 p-3">
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-          Quick commands
-        </p>
-
-        <div className="flex flex-wrap gap-2">
-          {quickCommands.map((command) => (
-            <button
-              key={command}
-              type="button"
-              onClick={() => sendMessage(command)}
-              disabled={loading}
-              className="rounded-full border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-slate-300 transition hover:border-orange-500 hover:text-orange-300 disabled:opacity-50"
-            >
-              {command}
-            </button>
-          ))}
-        </div>
-      </div>
-
+    <div className="flex flex-col h-full">
       {/* Messages */}
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-        {loadingHistory && (
-          <div className="text-sm text-slate-500">
-            Loading conversation...
-          </div>
-        )}
-
-        {!loadingHistory &&
-          messages.map((item, index) => (
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {messages.map((msg, i) => (
+          <div
+            key={i}
+            className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+          >
             <div
-              key={item.id || `${item.role}-${index}`}
-              className={
-                item.role === "user"
-                  ? "flex justify-end"
-                  : "flex justify-start"
-              }
+              className={`max-w-[90%] rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap leading-relaxed ${
+                msg.role === "user"
+                  ? "bg-orange-600 text-white rounded-br-none"
+                  : "bg-slate-800 text-slate-200 rounded-bl-none"
+              }`}
             >
-              <div
-                className={[
-                  "max-w-[90%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-6",
-                  item.role === "user"
-                    ? "rounded-br-none bg-orange-600 text-white"
-                    : "rounded-bl-none border border-slate-700 bg-slate-800 text-slate-200",
-                ].join(" ")}
-              >
-                {item.message}
-              </div>
+              {msg.role === "assistant" && (
+                <p className="text-xs text-orange-400 font-bold mb-1">
+                  🥋 Shang Tsung
+                </p>
+              )}
+              {msg.message}
             </div>
-          ))}
+          </div>
+        ))}
 
         {loading && (
           <div className="flex justify-start">
-            <div className="rounded-2xl rounded-bl-none border border-orange-900 bg-orange-950/50 px-4 py-3 text-sm text-orange-300">
-              Shang Tsung is planning...
+            <div className="bg-slate-800 text-slate-400 rounded-2xl rounded-bl-none px-4 py-3 text-sm italic">
+              Shang Tsung is thinking...
             </div>
           </div>
         )}
@@ -290,38 +134,57 @@ export default function ShangTsung({
         <div ref={bottomRef} />
       </div>
 
-      {/* Error */}
-      {error && (
-        <div className="border-t border-red-900 bg-red-950/40 px-4 py-2 text-xs text-red-300">
-          {error}
-        </div>
-      )}
-
-      {/* Input */}
-      <div className="border-t border-slate-800 bg-slate-950 p-4">
-        <textarea
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Describe what you want Shang Tsung to build..."
-          rows={3}
-          className="w-full resize-none rounded-xl border border-slate-700 bg-slate-900 px-3 py-3 text-sm text-white placeholder-slate-500 focus:border-orange-500 focus:outline-none"
-        />
-
-        <div className="mt-3 flex items-center justify-between">
-          <p className="text-xs text-slate-600">
-            Enter to send · Shift+Enter for a new line
+      {/* Suggestion Chips */}
+      <div className="px-4 pb-2">
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider">
+            Quick Commands
           </p>
-
           <button
-            type="button"
-            onClick={() => sendMessage()}
-            disabled={loading || !input.trim()}
-            className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={() => setShowAllChips(!showAllChips)}
+            className="text-xs text-slate-500 hover:text-slate-300 transition"
           >
-            {loading ? "Building..." : "Send"}
+            {showAllChips ? "Show less" : "Show more"}
           </button>
         </div>
+
+        <div className="flex flex-wrap gap-2">
+          {visibleChips.map((chip, i) => (
+            <button
+              key={i}
+              onClick={() => handleSend(chip.message)}
+              disabled={loading}
+              className="flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900 hover:border-orange-600 hover:bg-slate-800 disabled:opacity-50 px-3 py-1.5 text-xs font-medium text-slate-300 hover:text-white transition-all"
+            >
+              <span>{chip.icon}</span>
+              <span>{chip.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Input Area */}
+      <div className="border-t border-slate-800 p-4 bg-slate-900">
+        <div className="flex gap-2">
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Tell Shang Tsung what to build..."
+            rows={3}
+            className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-orange-500 resize-none"
+          />
+          <button
+            onClick={() => handleSend()}
+            disabled={loading || !input.trim()}
+            className="rounded-xl bg-orange-600 px-4 py-2 text-sm font-semibold hover:bg-orange-500 disabled:opacity-40 transition self-end"
+          >
+            Send
+          </button>
+        </div>
+        <p className="mt-2 text-xs text-slate-500">
+          Enter to send · Shift+Enter for new line
+        </p>
       </div>
     </div>
   );

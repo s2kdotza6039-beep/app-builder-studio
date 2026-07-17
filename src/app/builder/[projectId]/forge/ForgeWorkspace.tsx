@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 
 interface ProjectFile {
   id: string;
@@ -23,6 +23,27 @@ interface ChatMessage {
   role: "user" | "assistant";
   message: string;
 }
+
+interface SuggestionChip {
+  label: string;
+  message: string;
+  icon: string;
+}
+
+const FORGE_CHIPS: SuggestionChip[] = [
+  { icon: "🎨", label: "Hero orange", message: "Change the hero color to orange" },
+  { icon: "💚", label: "Button green", message: "Make the button green" },
+  { icon: "💰", label: "Add pricing", message: "Add a pricing section" },
+  { icon: "⭐", label: "Add testimonials", message: "Add a testimonials section" },
+  { icon: "❓", label: "Add FAQ", message: "Add a FAQ section" },
+  { icon: "📏", label: "Bigger heading", message: "Make the heading larger" },
+  { icon: "🌑", label: "Darker background", message: "Make the background darker" },
+  { icon: "📋", label: "What files?", message: "What files exist?" },
+  { icon: "🔵", label: "Hero blue", message: "Change the hero color to blue" },
+  { icon: "🟣", label: "Hero purple", message: "Change the hero color to purple" },
+  { icon: "🚫", label: "Hide nav", message: "Hide the navigation" },
+  { icon: "❓", label: "What can you do?", message: "What can you do?" },
+];
 
 async function readForgeResponse(response: Response): Promise<ForgeResponse> {
   const text = await response.text();
@@ -52,30 +73,29 @@ export default function ForgeWorkspace({
   const [previewKey, setPreviewKey] = useState(0);
   const [viewMode, setViewMode] = useState<"preview" | "code">("preview");
 
-  // Shang Tsung Forge Chat
+  // Shang Tsung Chat
   const [shangMessages, setShangMessages] = useState<ChatMessage[]>([
     {
       role: "assistant",
-      message: [
-        "I am Shang Tsung — your Code Editor inside The Forge.",
-        "",
-        "I can edit your generated files. Try:",
-        "• \"Change the hero color to orange\"",
-        "• \"Make the button green\"",
-        "• \"Make the heading larger\"",
-        "• \"What files exist?\"",
-        "",
-        "Generate code first, then tell me what to change.",
-      ].join("\n"),
+      message: "I am Shang Tsung — your Code Editor.\n\nTap a suggestion or tell me what to change in the code.",
     },
   ]);
   const [shangInput, setShangInput] = useState("");
   const [shangThinking, setShangThinking] = useState(false);
+  const [showAllChips, setShowAllChips] = useState(false);
+  const chatBottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [shangMessages]);
+
+  const visibleChips = showAllChips ? FORGE_CHIPS : FORGE_CHIPS.slice(0, 4);
 
   async function handleGenerate() {
     if (generating) return;
     setGenerating(true);
     setNotice(null);
+
     try {
       const res = await fetch(`/api/projects/${projectId}/forge-api`, {
         method: "POST",
@@ -87,12 +107,14 @@ export default function ForgeWorkspace({
       setSelectedFile(data.files?.[0] || null);
       setPreviewKey((k) => k + 1);
       setViewMode("preview");
-      setNotice({ type: "success", text: `Generated ${data.filesGenerated ?? data.files?.length} files successfully.` });
+      setNotice({ type: "success", text: `Generated ${data.filesGenerated ?? data.files?.length} files.` });
 
-      // Tell Shang Tsung files are ready
       setShangMessages((prev) => [
         ...prev,
-        { role: "assistant", message: `${data.filesGenerated ?? data.files?.length} files generated. I am ready to edit them. What would you like to change?` },
+        {
+          role: "assistant",
+          message: `${data.filesGenerated ?? data.files?.length} files generated. I am ready to edit them. What would you like to change?`,
+        },
       ]);
     } catch (e: any) {
       setNotice({ type: "error", text: e.message });
@@ -105,6 +127,7 @@ export default function ForgeWorkspace({
     if (downloading || !files.length) return;
     setDownloading(true);
     setNotice(null);
+
     try {
       const res = await fetch(`/api/projects/${projectId}/download-api`, { method: "GET" });
       if (!res.ok) throw new Error("Download failed");
@@ -125,42 +148,38 @@ export default function ForgeWorkspace({
     }
   }
 
-  async function handleShangSend() {
-    if (!shangInput.trim() || shangThinking) return;
+  async function handleShangSend(messageText?: string) {
+    const textToSend = messageText || shangInput.trim();
+    if (!textToSend || shangThinking) return;
 
-    const txt = shangInput.trim();
     setShangInput("");
-    setShangMessages((prev) => [...prev, { role: "user", message: txt }]);
+    setShangMessages((prev) => [...prev, { role: "user", message: textToSend }]);
     setShangThinking(true);
 
     try {
-      // Use forge-chat API (not regular chat)
       const res = await fetch(`/api/projects/${projectId}/forge-chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: txt }),
+        body: JSON.stringify({ message: textToSend }),
       });
 
       const data = await res.json();
 
-      // Add Shang Tsung's reply to the chat
       setShangMessages((prev) => [
         ...prev,
-        { role: "assistant", message: data.reply || "Could not process that request." },
+        { role: "assistant", message: data.reply || "Could not process that." },
       ]);
 
-      // If files were modified, update them locally AND refresh preview
       if (data.updatedFiles && data.updatedFiles.length > 0) {
         setFiles((prevFiles) =>
           prevFiles.map((f) => {
             const updated = data.updatedFiles.find(
-              (u: { id: string; file_path: string; content: string }) => u.id === f.id
+              (u: { id: string; content: string }) => u.id === f.id
             );
             return updated ? { ...f, content: updated.content } : f;
           })
         );
 
-        // Update selected file if it was modified
         setSelectedFile((prev) => {
           if (!prev) return prev;
           const updated = data.updatedFiles.find(
@@ -169,19 +188,17 @@ export default function ForgeWorkspace({
           return updated ? { ...prev, content: updated.content } : prev;
         });
 
-        // Auto-refresh the live preview
         setPreviewKey((k) => k + 1);
 
-        // Confirm in chat
         setShangMessages((prev) => [
           ...prev,
           {
             role: "assistant",
-            message: `✅ ${data.filesChanged} file${data.filesChanged === 1 ? "" : "s"} updated. Preview refreshed automatically.`,
+            message: `✅ ${data.filesChanged} file${data.filesChanged === 1 ? "" : "s"} updated. Preview refreshed.`,
           },
         ]);
       }
-    } catch (err) {
+    } catch {
       setShangMessages((prev) => [
         ...prev,
         { role: "assistant", message: "Connection error. Please try again." },
@@ -202,38 +219,84 @@ export default function ForgeWorkspace({
 
   return (
     <div className="flex h-full min-h-0">
-      {/* LEFT: Shang Tsung Code Editor Chat */}
+
+      {/* LEFT: Shang Tsung Code Editor */}
       <aside className="flex w-[320px] shrink-0 flex-col border-r border-slate-800 bg-slate-900">
         <div className="border-b border-slate-800 bg-slate-950 p-4">
           <p className="text-xs font-bold uppercase tracking-wider text-orange-400">
             🥋 Shang Tsung
           </p>
           <h2 className="mt-1 text-sm font-bold text-white">Code Editor</h2>
-          <p className="mt-1 text-xs text-slate-500">
-            Tell me what to change in the code
+          <p className="mt-0.5 text-xs text-slate-500">
+            Tap a suggestion or type a command
           </p>
         </div>
 
+        {/* Chat Messages */}
         <div className="min-h-0 flex-1 overflow-y-auto p-3 space-y-3">
           {shangMessages.map((msg, i) => (
             <div
               key={i}
-              className={`rounded-xl p-3 text-sm whitespace-pre-wrap ${
-                msg.role === "user"
-                  ? "bg-orange-900/40 border border-orange-800 text-orange-100"
-                  : "bg-slate-800 text-slate-200"
-              }`}
+              className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
             >
-              {msg.message}
+              <div
+                className={`max-w-[90%] rounded-2xl px-3 py-2.5 text-sm whitespace-pre-wrap leading-relaxed ${
+                  msg.role === "user"
+                    ? "bg-orange-600 text-white rounded-br-none"
+                    : "bg-slate-800 text-slate-200 rounded-bl-none"
+                }`}
+              >
+                {msg.role === "assistant" && (
+                  <p className="text-xs text-orange-400 font-bold mb-1">
+                    🥋 Shang Tsung
+                  </p>
+                )}
+                {msg.message}
+              </div>
             </div>
           ))}
+
           {shangThinking && (
-            <div className="bg-slate-800 p-3 rounded-xl text-sm text-slate-400 italic">
-              Shang Tsung is editing the code...
+            <div className="flex justify-start">
+              <div className="bg-slate-800 text-slate-400 rounded-2xl rounded-bl-none px-3 py-2.5 text-sm italic">
+                Editing code...
+              </div>
             </div>
           )}
+
+          <div ref={chatBottomRef} />
         </div>
 
+        {/* Suggestion Chips */}
+        <div className="px-3 pb-2">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider">
+              Quick Commands
+            </p>
+            <button
+              onClick={() => setShowAllChips(!showAllChips)}
+              className="text-xs text-slate-500 hover:text-slate-300 transition"
+            >
+              {showAllChips ? "Less" : "More"}
+            </button>
+          </div>
+
+          <div className="flex flex-wrap gap-1.5">
+            {visibleChips.map((chip, i) => (
+              <button
+                key={i}
+                onClick={() => handleShangSend(chip.message)}
+                disabled={shangThinking}
+                className="flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-950 hover:border-orange-600 hover:bg-slate-800 disabled:opacity-50 px-2.5 py-1.5 text-xs font-medium text-slate-300 hover:text-white transition-all"
+              >
+                <span>{chip.icon}</span>
+                <span>{chip.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Input */}
         <div className="border-t border-slate-800 p-3">
           <textarea
             value={shangInput}
@@ -245,16 +308,16 @@ export default function ForgeWorkspace({
               }
             }}
             rows={3}
-            placeholder="e.g. Change the hero color to orange..."
+            placeholder="Tell Shang Tsung what to change..."
             className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-orange-500 resize-none"
           />
           <button
             type="button"
-            onClick={handleShangSend}
+            onClick={() => handleShangSend()}
             disabled={shangThinking || !shangInput.trim()}
             className="mt-2 w-full rounded-lg bg-orange-600 hover:bg-orange-500 disabled:opacity-50 px-3 py-2 text-sm font-semibold transition"
           >
-            {shangThinking ? "Editing..." : "Send to Shang Tsung"}
+            {shangThinking ? "Editing..." : "Send"}
           </button>
         </div>
       </aside>
@@ -304,10 +367,10 @@ export default function ForgeWorkspace({
 
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {!hasFiles ? (
-            <div className="rounded-xl border border-dashed border-slate-700 p-4 text-center">
+            <div className="rounded-xl border border-dashed border-slate-700 p-4 text-center mt-2">
               <p className="text-sm text-slate-500">No files yet.</p>
-              <p className="mt-2 text-xs text-slate-600">
-                Click Generate Code first.
+              <p className="mt-1 text-xs text-slate-600">
+                Click Generate Code to start.
               </p>
             </div>
           ) : (
@@ -338,11 +401,11 @@ export default function ForgeWorkspace({
         </div>
 
         <div className="border-t border-slate-800 p-3 text-center text-xs text-slate-600">
-          {files.length} file{files.length !== 1 ? "s" : ""} generated
+          {files.length} file{files.length !== 1 ? "s" : ""}
         </div>
       </aside>
 
-      {/* RIGHT: Preview or Code Viewer */}
+      {/* RIGHT: Preview or Code */}
       <section className="flex flex-1 min-w-0 flex-col bg-slate-950">
         <div className="flex h-12 items-center justify-between border-b border-slate-800 bg-slate-900 px-4">
           <div className="flex gap-2">
@@ -350,7 +413,9 @@ export default function ForgeWorkspace({
               type="button"
               onClick={() => setViewMode("preview")}
               className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition ${
-                viewMode === "preview" ? "bg-orange-600 text-white" : "text-slate-400 hover:bg-slate-800"
+                viewMode === "preview"
+                  ? "bg-orange-600 text-white"
+                  : "text-slate-400 hover:bg-slate-800"
               }`}
             >
               👁 Preview
@@ -359,7 +424,9 @@ export default function ForgeWorkspace({
               type="button"
               onClick={() => setViewMode("code")}
               className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition ${
-                viewMode === "code" ? "bg-orange-600 text-white" : "text-slate-400 hover:bg-slate-800"
+                viewMode === "code"
+                  ? "bg-orange-600 text-white"
+                  : "text-slate-400 hover:bg-slate-800"
               }`}
             >
               {"</>"} Code
@@ -394,11 +461,11 @@ export default function ForgeWorkspace({
                 sandbox="allow-scripts allow-same-origin allow-forms allow-top-navigation allow-modals"
               />
             ) : (
-              <div className="flex h-full items-center justify-center text-slate-500 text-center px-6">
+              <div className="flex h-full items-center justify-center text-center px-6">
                 <div>
-                  <p className="text-lg mb-2">No Preview Yet</p>
+                  <p className="text-lg text-slate-500 mb-2">No Preview Yet</p>
                   <p className="text-sm text-slate-600">
-                    Click Generate Code to start building.
+                    Click Generate Code to build your app.
                   </p>
                 </div>
               </div>
