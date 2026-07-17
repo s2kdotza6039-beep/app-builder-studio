@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 export default function NewProjectPage() {
   const router = useRouter();
@@ -27,11 +28,7 @@ export default function NewProjectPage() {
       });
 
       const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to create project");
-      }
-
+      if (!res.ok) throw new Error(data.error || "Failed to create project");
       router.push(`/dashboard`);
     } catch (err: any) {
       setError(err.message);
@@ -40,20 +37,35 @@ export default function NewProjectPage() {
   };
 
   return (
-    <main className="min-h-screen bg-slate-950 px-6 py-10 text-white">
-      <div className="mx-auto max-w-3xl">
-        <p className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-400">
-          App Builder Studio
-        </p>
-        <h1 className="text-4xl font-bold">Start a new project</h1>
-        <p className="mt-3 text-slate-300">
-          Describe your app idea. Our AI will turn it into a full app plan.
-        </p>
+    <main className="min-h-screen bg-stone-950 text-stone-100">
+      <header className="border-b border-stone-800 bg-stone-900 px-6 py-4 flex items-center gap-4">
+        <Link href="/dashboard" className="text-sm text-stone-400 hover:text-stone-100 transition">
+          &larr; Dashboard
+        </Link>
+        <div className="h-5 w-px bg-stone-700" />
+        <div>
+          <h1 className="font-black text-stone-100">New Project</h1>
+          <p className="text-xs text-stone-500">Describe your idea and let AI plan it</p>
+        </div>
+      </header>
 
-        <div className="mt-10 space-y-6 rounded-2xl border border-slate-800 bg-slate-900 p-8">
+      <div className="mx-auto max-w-3xl px-6 py-12">
+        <div className="mb-8 text-center">
+          <div className="text-5xl mb-4">✨</div>
+          <h2 className="text-3xl font-black mb-2 text-stone-100">Start a New Project</h2>
+          <p className="text-stone-400 text-sm">
+            Describe your app idea below. Or use{" "}
+            <Link href="/brain-dump" className="text-orange-400 hover:text-orange-300 font-bold transition">
+              🧠 Brain Dump
+            </Link>{" "}
+            for a faster, smarter workflow.
+          </p>
+        </div>
+
+        <div className="rounded-2xl border border-stone-700 bg-stone-900 p-8 space-y-6">
           {/* Idea */}
           <div>
-            <label className="block text-sm font-semibold text-slate-300">
+            <label className="block text-sm font-black text-stone-300 mb-2">
               Describe your app idea
             </label>
             <textarea
@@ -61,19 +73,17 @@ export default function NewProjectPage() {
               onChange={(e) => setIdea(e.target.value)}
               rows={5}
               placeholder="e.g. An app that helps local musicians sell beats directly to content creators, with a built-in marketplace and royalty splitter."
-              className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 p-4 text-sm text-white placeholder-slate-500 focus:border-slate-500 focus:outline-none"
+              className="w-full rounded-xl border border-stone-700 bg-stone-950 p-4 text-sm text-stone-100 placeholder-stone-600 focus:border-orange-600 focus:outline-none resize-none"
             />
           </div>
 
           {/* App Type */}
           <div>
-            <label className="block text-sm font-semibold text-slate-300">
-              App type
-            </label>
+            <label className="block text-sm font-black text-stone-300 mb-2">App type</label>
             <select
               value={appType}
               onChange={(e) => setAppType(e.target.value)}
-              className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 p-3 text-sm text-white focus:border-slate-500 focus:outline-none"
+              className="w-full rounded-xl border border-stone-700 bg-stone-950 p-3 text-sm text-stone-100 focus:border-orange-600 focus:outline-none"
             >
               <option>Business App</option>
               <option>Marketplace</option>
@@ -92,13 +102,11 @@ export default function NewProjectPage() {
 
           {/* Complexity */}
           <div>
-            <label className="block text-sm font-semibold text-slate-300">
-              Complexity
-            </label>
+            <label className="block text-sm font-black text-stone-300 mb-2">Complexity</label>
             <select
               value={complexity}
               onChange={(e) => setComplexity(e.target.value)}
-              className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 p-3 text-sm text-white focus:border-slate-500 focus:outline-none"
+              className="w-full rounded-xl border border-stone-700 bg-stone-950 p-3 text-sm text-stone-100 focus:border-orange-600 focus:outline-none"
             >
               <option>Simple MVP</option>
               <option>Standard App</option>
@@ -108,7 +116,7 @@ export default function NewProjectPage() {
 
           {/* Error */}
           {error && (
-            <div className="rounded-xl border border-red-700 bg-red-950 p-4 text-sm text-red-300">
+            <div className="rounded-xl border border-red-800 bg-red-950/40 p-4 text-sm text-red-300">
               {error}
             </div>
           )}
@@ -117,9 +125,9 @@ export default function NewProjectPage() {
           <button
             onClick={handleGenerate}
             disabled={loading}
-            className="w-full rounded-xl bg-white px-5 py-3 text-sm font-semibold text-slate-900 transition hover:bg-slate-200 disabled:opacity-50"
+            className="w-full rounded-xl bg-orange-700 hover:bg-orange-600 px-5 py-4 text-sm font-black text-white transition disabled:opacity-50"
           >
-            {loading ? "Generating your app plan..." : "Generate App Plan"}
+            {loading ? "Generating your app plan..." : "Generate App Plan →"}
           </button>
         </div>
       </div>

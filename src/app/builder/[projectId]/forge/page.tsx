@@ -16,6 +16,7 @@ export default async function ForgePage(props: {
   const currentUser = await prisma.user.findUnique({
     where: { email: session.user.email },
   });
+
   if (!currentUser) redirect("/auth");
 
   const founderEmail = process.env.FOUNDER_EMAIL?.trim().toLowerCase() || "";
@@ -36,24 +37,34 @@ export default async function ForgePage(props: {
   if (!project) notFound();
 
   return (
-    <main className="flex h-screen flex-col overflow-hidden bg-slate-950 text-white">
-      <header className="flex h-[73px] shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900 px-6">
+    <main className="flex h-screen flex-col overflow-hidden bg-stone-950 text-stone-100">
+      <header className="flex h-[73px] shrink-0 items-center justify-between border-b border-stone-800 bg-stone-900 px-6">
         <div className="flex min-w-0 items-center gap-4">
-          <Link href={`/builder/${projectId}/overview`} className="shrink-0 text-sm text-slate-400 hover:text-white">
+          <Link
+            href={`/builder/${projectId}/overview`}
+            className="shrink-0 text-sm text-stone-400 transition hover:text-stone-100"
+          >
             &larr; Back to Planning
           </Link>
-          <div className="h-5 w-px bg-slate-700" />
+          <div className="h-5 w-px bg-stone-700" />
           <div className="min-w-0">
-            <h1 className="truncate text-lg font-bold">{project.app_name || "My App"}</h1>
-            <p className="truncate text-xs text-slate-500">Stage 2: The Forge</p>
+            <h1 className="truncate text-lg font-black text-stone-100">
+              {project.app_name || "My App"}
+            </h1>
+            <p className="truncate text-xs text-stone-500">Stage 2: The Forge</p>
           </div>
         </div>
-        <span className="rounded-full border border-emerald-800 bg-emerald-950/50 px-3 py-1.5 text-xs font-semibold text-emerald-300">
+        <span className="rounded-full border border-orange-800/50 bg-orange-900/20 px-3 py-1.5 text-xs font-black text-orange-400">
           BUILDING
         </span>
       </header>
+
       <div className="min-h-0 flex-1">
-        <ForgeWorkspace projectId={projectId} projectName={project.app_name || "My App"} initialFiles={project.files} />
+        <ForgeWorkspace
+          projectId={projectId}
+          projectName={project.app_name || "My App"}
+          initialFiles={project.files}
+        />
       </div>
     </main>
   );
