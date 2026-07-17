@@ -13,7 +13,6 @@ const PROJECT_LIMITS: Record<string, number> = {
 export default async function DashboardPage() {
   const session = await getServerSession(authOptions);
 
-  // Type-safe check: ensure session, user, and email all exist before querying DB
   if (!session?.user?.email) {
     redirect("/auth");
   }
@@ -32,14 +31,18 @@ export default async function DashboardPage() {
   }
 
   const isAdmin = user.role === "ADMIN";
-  const limit = isAdmin ? Infinity : PROJECT_LIMITS[user.subscription_plan || "FREE"] || 3;
+  const limit = isAdmin
+    ? Infinity
+    : PROJECT_LIMITS[user.subscription_plan || "FREE"] || 3;
   const projectCount = user.projects.length;
   const canCreate = isAdmin || projectCount < limit;
 
   return (
     <main className="min-h-screen bg-slate-950 px-6 py-10 text-white">
       <div className="mx-auto max-w-5xl">
-        <div className="flex items-center justify-between">
+
+        {/* Header */}
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <p className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-400">
               App Builder Studio
@@ -54,32 +57,63 @@ export default async function DashboardPage() {
             </p>
           </div>
 
-          {canCreate ? (
+          {/* Action Buttons */}
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Brain Dump Button */}
             <Link
-              href="/builder/new"
-              className="rounded-xl bg-white px-5 py-3 text-sm font-semibold text-slate-900 transition hover:bg-slate-200"
+              href="/brain-dump"
+              className="rounded-xl border border-orange-700 bg-orange-950/30 hover:bg-orange-900/40 px-5 py-3 text-sm font-semibold text-orange-400 transition"
             >
-              + New Project
+              🧠 Brain Dump
             </Link>
-          ) : (
-            <span className="rounded-xl bg-slate-800 px-5 py-3 text-sm font-semibold text-slate-500">
-              Limit Reached — Upgrade Plan
-            </span>
-          )}
+
+            {/* New Project Button */}
+            {canCreate ? (
+              <Link
+                href="/builder/new"
+                className="rounded-xl bg-white px-5 py-3 text-sm font-semibold text-slate-900 transition hover:bg-slate-200"
+              >
+                + New Project
+              </Link>
+            ) : (
+              <span className="rounded-xl bg-slate-800 px-5 py-3 text-sm font-semibold text-slate-500">
+                Limit Reached — Upgrade Plan
+              </span>
+            )}
+          </div>
         </div>
 
+        {/* Projects Section */}
         <div className="mt-10">
           <h2 className="text-xl font-semibold">Your projects</h2>
 
+          {/* Empty State */}
           {user.projects.length === 0 && (
-            <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-900 p-8 text-center">
-              <p className="text-slate-400">
-                You haven't created any projects yet. Start by describing your
-                first app idea.
+            <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-900 p-12 text-center">
+              <div className="text-5xl mb-4">🧠</div>
+              <h3 className="text-xl font-bold mb-2">No projects yet</h3>
+              <p className="text-slate-400 mb-6 max-w-md mx-auto">
+                Start by describing your first app idea using Brain Dump,
+                or create a project manually.
               </p>
+              <div className="flex gap-3 justify-center">
+                <Link
+                  href="/brain-dump"
+                  className="rounded-xl border border-orange-700 bg-orange-950/30 hover:bg-orange-900/40 px-6 py-3 text-sm font-semibold text-orange-400 transition"
+                >
+                  🧠 Brain Dump
+                </Link>
+                <Link
+                  href="/builder/new"
+                  className="rounded-xl bg-white px-6 py-3 text-sm font-semibold text-slate-900 transition hover:bg-slate-200"
+                >
+                  + New Project
+                </Link>
+              </div>
             </div>
           )}
 
+          {/* Project Grid */}
           <div className="mt-6 grid gap-4 sm:grid-cols-2">
             {user.projects.map((project) => (
               <Link
@@ -87,15 +121,19 @@ export default async function DashboardPage() {
                 href={`/builder/${project.id}/overview`}
                 className="block rounded-2xl border border-slate-800 bg-slate-900 p-6 transition hover:border-slate-600 hover:bg-slate-800"
               >
+                {/* Project Name */}
                 <h3 className="text-lg font-semibold text-white">
                   {project.app_name || "Untitled Project"}
                 </h3>
-                <p className="mt-2 text-sm text-slate-400">
+
+                {/* Project Description */}
+                <p className="mt-2 text-sm text-slate-400 line-clamp-2">
                   {project.app_description || "No description yet."}
                 </p>
 
+                {/* Project Meta */}
                 <div className="mt-4 flex items-center justify-between text-xs text-slate-500">
-                  <span>{project.app_type}</span>
+                  <span>{project.app_type || "App"}</span>
                   <span className="rounded-full bg-slate-800 px-2 py-1 text-slate-300">
                     {project.status}
                   </span>
@@ -104,6 +142,7 @@ export default async function DashboardPage() {
             ))}
           </div>
         </div>
+
       </div>
     </main>
   );
