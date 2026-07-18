@@ -36,6 +36,24 @@ export default async function ForgePage(props: {
 
   if (!project) notFound();
 
+  // Load the last 13 messages from previous Forge sessions
+  const previousMessages = await prisma.aiMessage.findMany({
+    where: { project_id: projectId },
+    orderBy: { created_at: "desc" },
+    take: 13,
+    select: {
+      role: true,
+      message: true,
+      created_at: true,
+    },
+  });
+
+  // Reverse so oldest message is first
+  const chatHistory = previousMessages.reverse().map((m) => ({
+    role: m.role as "user" | "assistant",
+    message: m.message,
+  }));
+
   return (
     <main className="flex h-screen flex-col overflow-hidden bg-stone-950 text-stone-100">
       <header className="flex h-[73px] shrink-0 items-center justify-between border-b border-stone-800 bg-stone-900 px-6">
@@ -64,6 +82,7 @@ export default async function ForgePage(props: {
           projectId={projectId}
           projectName={project.app_name || "My App"}
           initialFiles={project.files}
+          chatHistory={chatHistory}
         />
       </div>
     </main>

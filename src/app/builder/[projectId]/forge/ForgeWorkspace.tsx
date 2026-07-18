@@ -21,8 +21,17 @@ interface ForgeResponse {
 }
 
 type Notice = { type: "success" | "error"; text: string } | null;
-interface ChatMessage { role: "user" | "assistant"; message: string; }
-interface SuggestionChip { label: string; message: string; icon: string; }
+
+interface ChatMessage {
+  role: "user" | "assistant";
+  message: string;
+}
+
+interface SuggestionChip {
+  label: string;
+  message: string;
+  icon: string;
+}
 
 const FORGE_CHIPS: SuggestionChip[] = [
   { icon: "🎨", label: "Hero orange", message: "Change the hero color to orange" },
@@ -36,7 +45,7 @@ const FORGE_CHIPS: SuggestionChip[] = [
   { icon: "🔵", label: "Hero blue", message: "Change the hero color to blue" },
   { icon: "🟣", label: "Hero purple", message: "Change the hero color to purple" },
   { icon: "🚫", label: "Hide nav", message: "Hide the navigation" },
-  { icon: "❓", label: "Help", message: "What can you do?" },
+  { icon: "🕐", label: "Last session?", message: "What did we change last session?" },
 ];
 
 async function readForgeResponse(response: Response): Promise<ForgeResponse> {
@@ -73,10 +82,12 @@ export default function ForgeWorkspace({
   projectId,
   projectName,
   initialFiles,
+  chatHistory = [],
 }: {
   projectId: string;
   projectName: string;
   initialFiles: ProjectFile[];
+  chatHistory?: ChatMessage[];
 }) {
   const habits = useShangTsungHabits(projectId);
 
@@ -91,21 +102,38 @@ export default function ForgeWorkspace({
   const [explorerCollapsed, setExplorerCollapsed] = useState(false);
   const [isFullScreen, setIsFullScreen] = useState(false);
   const [showVersionHistory, setShowVersionHistory] = useState(false);
-  const [shangMessages, setShangMessages] = useState<ChatMessage[]>([
-    { role: "assistant", message: "I am Shang Tsung.\n\nTap a suggestion or type a command." },
-  ]);
-  const [shangInput, setShangInput] = useState("");
-  const [shangThinking, setShangThinking] = useState(false);
-  const [showAllChips, setShowAllChips] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [githubConnected, setGithubConnected] = useState(false);
-  const [githubUsername, setGithubUsername] = useState<string | null>(null);
   const [pushing, setPushing] = useState(false);
   const [githubUrl, setGithubUrl] = useState<string | null>(null);
+  const [githubConnected, setGithubConnected] = useState(false);
+  const [githubUsername, setGithubUsername] = useState<string | null>(null);
   const [deploying, setDeploying] = useState(false);
   const [liveUrl, setLiveUrl] = useState<string | null>(null);
   const [showLiveUrlInput, setShowLiveUrlInput] = useState(false);
   const [liveUrlInput, setLiveUrlInput] = useState("");
+  const [shangInput, setShangInput] = useState("");
+  const [shangThinking, setShangThinking] = useState(false);
+  const [showAllChips, setShowAllChips] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  // Build initial messages from history + greeting
+  const buildInitialMessages = (): ChatMessage[] => {
+    if (chatHistory.length === 0) {
+      return [{
+        role: "assistant",
+        message: "I am Shang Tsung — your Code Editor.\n\nTap a suggestion or type a command.",
+      }];
+    }
+
+    // Has history — show it with a memory notice
+    const memoryNotice: ChatMessage = {
+      role: "assistant",
+      message: `Welcome back, Founder. I remember our last ${chatHistory.length} message${chatHistory.length !== 1 ? "s" : ""}.\n\nAsk me "What did we change last session?" to review our work, or tell me what to do next.`,
+    };
+
+    return [memoryNotice, ...chatHistory];
+  };
+
+  const [shangMessages, setShangMessages] = useState<ChatMessage[]>(buildInitialMessages);
   const chatBottomRef = useRef<HTMLDivElement>(null);
 
   // Apply habits on load
@@ -121,12 +149,16 @@ export default function ForgeWorkspace({
         : null;
       setSelectedFile(preferred || initialFiles[0]);
     }
-    const summary = habits.getHabitSummary();
-    if (summary && habits.totalSessions >= 3) {
-      setShangMessages([{
-        role: "assistant",
-        message: `Welcome back, Founder.\n\n${summary}\n\nWhat are we building today?`,
-      }]);
+
+    // If no chat history, show habit-based greeting
+    if (chatHistory.length === 0) {
+      const summary = habits.getHabitSummary();
+      if (summary && habits.totalSessions >= 3) {
+        setShangMessages([{
+          role: "assistant",
+          message: `Welcome back, Founder.\n\n${summary}\n\nNo previous Forge messages for this project. What are we building today?`,
+        }]);
+      }
     }
   }, [habits.loaded]);
 
@@ -142,7 +174,7 @@ export default function ForgeWorkspace({
     chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [shangMessages]);
 
-  // Check GitHub connection on load
+  // Check GitHub connection
   useEffect(() => {
     async function checkGitHub() {
       try {
@@ -155,7 +187,7 @@ export default function ForgeWorkspace({
     checkGitHub();
   }, [projectId]);
 
-  // Handle GitHub OAuth callback
+  // Handle GitHub OAuth callback in URL
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
@@ -261,44 +293,24 @@ export default function ForgeWorkspace({
 
   async function handleDeploy() {
     if (deploying) return;
-
     if (!githubConnected) {
-      setNotice({
-        type: "error",
-        text: "Push to GitHub first before deploying to Vercel.",
-      });
+      setNotice({ type: "error", text: "Push to GitHub first before deploying to Vercel." });
       return;
     }
-
     setDeploying(true); setNotice(null);
-
     try {
       const res = await fetch(`/api/projects/${projectId}/deploy`, { method: "GET" });
       const data = await res.json();
-
       if (!res.ok) {
-        if (data.needsGitHub) {
-          setNotice({ type: "error", text: "Push to GitHub first, then deploy." });
-        } else {
-          setNotice({ type: "error", text: data.error || "Deploy failed." });
-        }
+        setNotice({ type: "error", text: data.error || "Deploy failed." });
         return;
       }
-
-      // Open Vercel deploy URL in new tab
       window.open(data.vercelDeployUrl, "_blank");
-
-      // Show input for user to paste their live URL back
       setShowLiveUrlInput(true);
-      setNotice({
-        type: "success",
-        text: "Vercel opened in a new tab. Deploy your app, then paste your live URL below.",
-      });
+      setNotice({ type: "success", text: "Vercel opened. Deploy your app, then paste your live URL below." });
     } catch {
       setNotice({ type: "error", text: "Connection error. Please try again." });
-    } finally {
-      setDeploying(false);
-    }
+    } finally { setDeploying(false); }
   }
 
   async function handleSaveLiveUrl() {
@@ -318,7 +330,7 @@ export default function ForgeWorkspace({
     }
   }
 
-  // ─── SHANG TSUNG ────────────────────────────────────────────────────────────
+  // ─── SHANG TSUNG SEND ───────────────────────────────────────────────────────
 
   async function handleShangSend(messageText?: string) {
     const txt = messageText || shangInput.trim();
@@ -335,7 +347,8 @@ export default function ForgeWorkspace({
       });
       const data = await res.json();
       setShangMessages((prev) => [...prev, {
-        role: "assistant", message: data.reply || "Could not process that.",
+        role: "assistant",
+        message: data.reply || "Could not process that.",
       }]);
       if (data.updatedFiles?.length > 0) {
         await saveVersion(projectId, `Before: ${txt.slice(0, 50)}`, txt);
@@ -430,11 +443,9 @@ export default function ForgeWorkspace({
       {showLiveUrlInput && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
           <div className="w-full max-w-md rounded-2xl border border-stone-700 bg-stone-900 p-6 shadow-2xl">
-            <h3 className="font-black text-stone-100 text-lg mb-2">
-              🚀 Save Your Live URL
-            </h3>
+            <h3 className="font-black text-stone-100 text-lg mb-2">🚀 Save Your Live URL</h3>
             <p className="text-stone-400 text-sm mb-4">
-              After Vercel finishes deploying, paste your live URL here to save it to your project.
+              After Vercel finishes deploying, paste your live URL here.
             </p>
             <input
               type="url"
@@ -443,21 +454,15 @@ export default function ForgeWorkspace({
               placeholder="https://your-app.vercel.app"
               className="w-full bg-stone-950 border border-stone-700 rounded-xl px-4 py-3 text-sm text-stone-100 placeholder-stone-600 focus:outline-none focus:border-orange-600 mb-4"
               autoFocus
+              onKeyDown={(e) => { if (e.key === "Enter") handleSaveLiveUrl(); }}
             />
             <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={handleSaveLiveUrl}
-                disabled={!liveUrlInput.trim()}
-                className="flex-1 rounded-xl bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 py-3 text-sm font-black text-white transition"
-              >
+              <button type="button" onClick={handleSaveLiveUrl} disabled={!liveUrlInput.trim()}
+                className="flex-1 rounded-xl bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 py-3 text-sm font-black text-white transition">
                 Save Live URL
               </button>
-              <button
-                type="button"
-                onClick={() => { setShowLiveUrlInput(false); setLiveUrlInput(""); }}
-                className="rounded-xl border border-stone-700 hover:bg-stone-800 px-4 py-3 text-sm text-stone-400 transition"
-              >
+              <button type="button" onClick={() => { setShowLiveUrlInput(false); setLiveUrlInput(""); }}
+                className="rounded-xl border border-stone-700 hover:bg-stone-800 px-4 py-3 text-sm text-stone-400 transition">
                 Later
               </button>
             </div>
@@ -468,6 +473,7 @@ export default function ForgeWorkspace({
       {/* ── SHANG TSUNG PANEL ─────────────────────────────────────────────── */}
       {!shangCollapsed ? (
         <aside className="flex w-[300px] shrink-0 flex-col border-r border-stone-800 bg-stone-900">
+
           <div className="border-b border-stone-800 bg-stone-950 px-4 py-3 flex items-center justify-between">
             <div>
               <div className="flex items-center gap-2">
@@ -479,9 +485,18 @@ export default function ForgeWorkspace({
                     Learned
                   </span>
                 )}
+                {chatHistory.length > 0 && (
+                  <span className="text-xs bg-blue-900/40 border border-blue-800/50 text-blue-400 px-1.5 py-0.5 rounded font-bold">
+                    Memory
+                  </span>
+                )}
               </div>
               <p className="text-xs text-stone-500 mt-0.5">
-                {showHabitBadge ? `Session #${habits.totalSessions} · Habits active` : "Code Editor"}
+                {chatHistory.length > 0
+                  ? `Remembers last ${chatHistory.length} message${chatHistory.length !== 1 ? "s" : ""}`
+                  : showHabitBadge
+                  ? `Session #${habits.totalSessions} · Habits active`
+                  : "Code Editor"}
               </p>
             </div>
             <button type="button" onClick={() => setShangCollapsed(true)}
@@ -490,11 +505,14 @@ export default function ForgeWorkspace({
             </button>
           </div>
 
+          {/* Chat Messages */}
           <div className="min-h-0 flex-1 overflow-y-auto p-3 space-y-3">
             {shangMessages.map((msg, i) => (
               <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div className={`max-w-[90%] rounded-2xl px-3 py-2.5 text-sm whitespace-pre-wrap leading-relaxed ${
-                  msg.role === "user" ? "bg-orange-700 text-white rounded-br-none" : "bg-stone-800 text-stone-200 rounded-bl-none"
+                  msg.role === "user"
+                    ? "bg-orange-700 text-white rounded-br-none"
+                    : "bg-stone-800 text-stone-200 rounded-bl-none"
                 }`}>
                   {msg.role === "assistant" && (
                     <p className="text-xs text-orange-400 font-black mb-1">🥋 Shang Tsung</p>
@@ -513,13 +531,16 @@ export default function ForgeWorkspace({
             <div ref={chatBottomRef} />
           </div>
 
+          {/* Suggestion Chips */}
           <div className="px-3 pb-2">
             <div className="flex items-center justify-between mb-1.5">
               <div className="flex items-center gap-2">
                 <p className="text-xs text-stone-500 font-black uppercase tracking-wider">
                   Quick Commands
                 </p>
-                {showHabitBadge && <span className="text-xs text-orange-500">↑ sorted</span>}
+                {showHabitBadge && (
+                  <span className="text-xs text-orange-500">↑ sorted</span>
+                )}
               </div>
               <button onClick={() => setShowAllChips(!showAllChips)}
                 className="text-xs text-stone-500 hover:text-stone-300 transition">
@@ -530,7 +551,8 @@ export default function ForgeWorkspace({
               {visibleChips.map((chip, i) => {
                 const usageCount = habits.session.chipUsage[chip.message]?.count || 0;
                 return (
-                  <button key={i} onClick={() => handleShangSend(chip.message)} disabled={shangThinking}
+                  <button key={i} onClick={() => handleShangSend(chip.message)}
+                    disabled={shangThinking}
                     className={`flex items-center gap-1 rounded-lg border disabled:opacity-50 px-2 py-1.5 text-xs font-medium transition-all ${
                       usageCount > 2
                         ? "border-orange-800/60 bg-orange-900/20 text-orange-300 hover:border-orange-600"
@@ -546,12 +568,14 @@ export default function ForgeWorkspace({
             </div>
           </div>
 
+          {/* Chat Input */}
           <div className="border-t border-stone-800 p-3">
             <textarea value={shangInput} onChange={(e) => setShangInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleShangSend(); } }}
               rows={2} placeholder="Tell Shang Tsung what to change..."
               className="w-full bg-stone-950 border border-stone-800 rounded-lg p-2 text-sm text-stone-100 placeholder-stone-600 focus:outline-none focus:border-orange-600 resize-none" />
-            <button type="button" onClick={() => handleShangSend()} disabled={shangThinking || !shangInput.trim()}
+            <button type="button" onClick={() => handleShangSend()}
+              disabled={shangThinking || !shangInput.trim()}
               className="mt-1.5 w-full rounded-lg bg-orange-700 hover:bg-orange-600 disabled:opacity-50 px-3 py-2 text-sm font-black text-white transition">
               {shangThinking ? "Editing..." : "Send"}
             </button>
@@ -560,7 +584,8 @@ export default function ForgeWorkspace({
       ) : (
         <div className="flex flex-col items-center border-r border-stone-800 bg-stone-900 w-10 shrink-0">
           <button type="button" onClick={() => setShangCollapsed(false)}
-            className="w-full flex flex-col items-center gap-1 py-3 hover:bg-stone-800 transition group" title="Expand Shang Tsung">
+            className="w-full flex flex-col items-center gap-1 py-3 hover:bg-stone-800 transition group"
+            title="Expand Shang Tsung">
             <span className="text-base">🥋</span>
             <span className="text-stone-600 group-hover:text-orange-400 transition text-xs">▶</span>
           </button>
@@ -570,6 +595,7 @@ export default function ForgeWorkspace({
       {/* ── FILE EXPLORER PANEL ───────────────────────────────────────────── */}
       {!explorerCollapsed ? (
         <aside className="flex w-[240px] shrink-0 flex-col border-r border-stone-800 bg-stone-900">
+
           <div className="p-3 border-b border-stone-800 bg-stone-950 flex items-center justify-between">
             <div>
               <p className="text-xs uppercase text-stone-500 font-black">Files</p>
@@ -621,7 +647,9 @@ export default function ForgeWorkspace({
                         }`}>
                         <span className="shrink-0 text-xs">{getFileIcon(f.file_path)}</span>
                         <span className="truncate font-mono text-xs flex-1">{f.file_path}</span>
-                        {openCount >= 3 && <span className="text-orange-500 text-xs shrink-0">★</span>}
+                        {openCount >= 3 && (
+                          <span className="text-orange-500 text-xs shrink-0">★</span>
+                        )}
                       </button>
                     </li>
                   );
@@ -638,7 +666,8 @@ export default function ForgeWorkspace({
       ) : (
         <div className="flex flex-col items-center border-r border-stone-800 bg-stone-900 w-10 shrink-0">
           <button type="button" onClick={() => setExplorerCollapsed(false)}
-            className="w-full flex flex-col items-center gap-1 py-3 hover:bg-stone-800 transition group" title="Expand File Explorer">
+            className="w-full flex flex-col items-center gap-1 py-3 hover:bg-stone-800 transition group"
+            title="Expand File Explorer">
             <span className="text-base">📁</span>
             <span className="text-stone-600 group-hover:text-stone-100 transition text-xs">▶</span>
           </button>
@@ -648,7 +677,6 @@ export default function ForgeWorkspace({
       {/* ── MAIN AREA ─────────────────────────────────────────────────────── */}
       <section className="flex flex-1 min-w-0 flex-col bg-stone-950">
 
-        {/* Top Bar */}
         <div className="flex h-11 items-center justify-between border-b border-stone-800 bg-stone-900 px-4 shrink-0">
           <div className="flex items-center gap-2">
             <button type="button" onClick={() => setViewMode("preview")}
@@ -667,7 +695,6 @@ export default function ForgeWorkspace({
 
           <div className="flex items-center gap-2">
 
-            {/* File path + copy */}
             {viewMode === "code" && selectedFile && (
               <>
                 <span className="truncate font-mono text-xs text-stone-500 max-w-[100px]">
@@ -675,12 +702,11 @@ export default function ForgeWorkspace({
                 </span>
                 <button type="button" onClick={handleCopyFile}
                   className="border border-stone-700 hover:border-stone-500 bg-stone-900 hover:bg-stone-800 px-2.5 py-1.5 rounded-lg text-xs text-stone-400 hover:text-stone-100 transition">
-                  {copied ? "✓ Copied" : "Copy"}
+                  {copied ? "✓" : "Copy"}
                 </button>
               </>
             )}
 
-            {/* Refresh */}
             {viewMode === "preview" && hasFiles && (
               <button type="button" onClick={() => setPreviewKey((k) => k + 1)}
                 className="border border-stone-700 px-2.5 py-1.5 rounded-lg text-xs text-stone-400 hover:bg-stone-800 transition">
@@ -701,15 +727,14 @@ export default function ForgeWorkspace({
               </button>
             )}
 
-            {/* GitHub Repo Link */}
             {githubUrl && (
               <a href={githubUrl} target="_blank" rel="noopener noreferrer"
-                className="border border-emerald-800/50 bg-emerald-900/20 hover:bg-emerald-900/30 px-2.5 py-1.5 rounded-lg text-xs font-black text-emerald-400 hover:text-emerald-300 transition">
+                className="border border-emerald-800/50 bg-emerald-900/20 hover:bg-emerald-900/30 px-2.5 py-1.5 rounded-lg text-xs font-black text-emerald-400 transition">
                 📂 GitHub
               </a>
             )}
 
-            {/* Vercel Deploy Button */}
+            {/* Vercel Deploy */}
             {hasFiles && githubConnected && (
               <button type="button" onClick={handleDeploy} disabled={deploying}
                 className="border border-blue-800/50 bg-blue-900/20 hover:bg-blue-900/30 px-2.5 py-1.5 rounded-lg text-xs font-black text-blue-400 hover:text-blue-300 disabled:opacity-50 transition"
@@ -718,7 +743,6 @@ export default function ForgeWorkspace({
               </button>
             )}
 
-            {/* Live URL Link */}
             {liveUrl && (
               <a href={liveUrl} target="_blank" rel="noopener noreferrer"
                 className="border border-purple-800/50 bg-purple-900/20 hover:bg-purple-900/30 px-2.5 py-1.5 rounded-lg text-xs font-black text-purple-400 hover:text-purple-300 transition">
@@ -759,7 +783,6 @@ export default function ForgeWorkspace({
           </div>
         </div>
 
-        {/* Content */}
         <div className="flex-1 overflow-hidden">
           {viewMode === "preview" ? (
             hasFiles ? (
