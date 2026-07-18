@@ -62,16 +62,31 @@ export default async function DashboardPage() {
               <p className="text-xs text-stone-500 leading-none mt-0.5">by S2KDOTZA Entertainment</p>
             </div>
           </div>
+
           <div className="flex items-center gap-3">
-            <Link href="/brain-dump" className="rounded-xl border border-orange-800/50 bg-orange-900/20 hover:bg-orange-900/30 px-4 py-2 text-sm font-bold text-orange-400 transition">
+            <Link
+              href="/import"
+              className="rounded-xl border border-stone-700 hover:bg-stone-800 px-4 py-2 text-sm font-bold text-stone-300 transition"
+            >
+              📥 Import
+            </Link>
+            <Link
+              href="/brain-dump"
+              className="rounded-xl border border-orange-800/50 bg-orange-900/20 hover:bg-orange-900/30 px-4 py-2 text-sm font-bold text-orange-400 transition"
+            >
               🧠 Brain Dump
             </Link>
             {canCreate ? (
-              <Link href="/builder/new" className="rounded-xl bg-orange-700 hover:bg-orange-600 px-4 py-2 text-sm font-bold text-white transition">
+              <Link
+                href="/builder/new"
+                className="rounded-xl bg-orange-700 hover:bg-orange-600 px-4 py-2 text-sm font-bold text-white transition"
+              >
                 + New Project
               </Link>
             ) : (
-              <span className="rounded-xl bg-stone-800 px-4 py-2 text-sm font-semibold text-stone-500">Limit Reached</span>
+              <span className="rounded-xl bg-stone-800 px-4 py-2 text-sm font-semibold text-stone-500">
+                Limit Reached
+              </span>
             )}
           </div>
         </div>
@@ -82,7 +97,9 @@ export default async function DashboardPage() {
           <p className="text-sm text-stone-500 mb-1">{greeting},</p>
           <h1 className="text-4xl font-black text-stone-100">{firstName}.</h1>
           <p className="text-stone-500 mt-2 text-sm">
-            {isAdmin ? "Admin Access — Unlimited Projects" : `${projectCount} of ${limit} projects · ${user.subscription_plan} plan`}
+            {isAdmin
+              ? "Admin Access — Unlimited Projects"
+              : `${projectCount} of ${limit} projects · ${user.subscription_plan} plan`}
           </p>
         </div>
 
@@ -94,18 +111,27 @@ export default async function DashboardPage() {
                 <div className="text-6xl mb-4">🧠</div>
                 <h3 className="text-2xl font-black text-stone-100 mb-2">No projects yet</h3>
                 <p className="text-stone-400 mb-8 max-w-md mx-auto text-sm leading-relaxed">
-                  Start by dropping your first idea into Brain Dump. Shang Tsung structures it in seconds.
+                  Start with Brain Dump, import existing code, or create a new project manually.
                 </p>
                 <div className="flex gap-3 justify-center flex-wrap">
-                  <Link href="/brain-dump" className="rounded-xl border border-orange-800/50 bg-orange-900/20 hover:bg-orange-900/30 px-6 py-3 text-sm font-bold text-orange-400 transition">🧠 Brain Dump</Link>
-                  <Link href="/builder/new" className="rounded-xl bg-orange-700 hover:bg-orange-600 px-6 py-3 text-sm font-bold text-white transition">+ New Project</Link>
+                  <Link href="/brain-dump" className="rounded-xl border border-orange-800/50 bg-orange-900/20 hover:bg-orange-900/30 px-6 py-3 text-sm font-bold text-orange-400 transition">
+                    🧠 Brain Dump
+                  </Link>
+                  <Link href="/import" className="rounded-xl border border-stone-700 hover:bg-stone-800 px-6 py-3 text-sm font-bold text-stone-300 transition">
+                    📥 Import Code
+                  </Link>
+                  <Link href="/builder/new" className="rounded-xl bg-orange-700 hover:bg-orange-600 px-6 py-3 text-sm font-bold text-white transition">
+                    + New Project
+                  </Link>
                 </div>
               </div>
             )}
 
             {mostRecentProject && (
               <div>
-                <p className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-3">Continue where you left off</p>
+                <p className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-3">
+                  Continue where you left off
+                </p>
                 <div className="rounded-2xl border border-stone-700 bg-stone-900 overflow-hidden">
                   <div className="p-6">
                     <div className="flex items-center gap-2 mb-3">
@@ -114,8 +140,12 @@ export default async function DashboardPage() {
                       </span>
                       <span className="text-xs text-stone-500">{mostRecentProject.app_type}</span>
                     </div>
-                    <h2 className="text-2xl font-black text-stone-100 truncate">{mostRecentProject.app_name || "Untitled Project"}</h2>
-                    <p className="text-stone-400 text-sm mt-2 line-clamp-2">{mostRecentProject.app_description || "No description yet."}</p>
+                    <h2 className="text-2xl font-black text-stone-100 truncate">
+                      {mostRecentProject.app_name || "Untitled Project"}
+                    </h2>
+                    <p className="text-stone-400 text-sm mt-2 line-clamp-2">
+                      {mostRecentProject.app_description || "No description yet."}
+                    </p>
                     <div className="flex gap-4 mt-4 text-xs text-stone-500">
                       <span>📄 {mostRecentProject._count.routes} pages</span>
                       <span>⚡ {mostRecentProject._count.features} features</span>
@@ -123,10 +153,16 @@ export default async function DashboardPage() {
                     </div>
                   </div>
                   <div className="border-t border-stone-800 bg-stone-800/50 px-6 py-4 flex gap-3">
-                    <Link href={`/builder/${mostRecentProject.id}/overview`} className="flex-1 rounded-xl border border-stone-600 hover:bg-stone-700 px-4 py-3 text-sm font-bold text-stone-100 text-center transition">
+                    <Link
+                      href={`/builder/${mostRecentProject.id}/overview`}
+                      className="flex-1 rounded-xl border border-stone-600 hover:bg-stone-700 px-4 py-3 text-sm font-bold text-stone-100 text-center transition"
+                    >
                       ← Continue Planning
                     </Link>
-                    <Link href={`/builder/${mostRecentProject.id}/forge`} className="flex-1 rounded-xl bg-orange-700 hover:bg-orange-600 px-4 py-3 text-sm font-bold text-white text-center transition">
+                    <Link
+                      href={`/builder/${mostRecentProject.id}/forge`}
+                      className="flex-1 rounded-xl bg-orange-700 hover:bg-orange-600 px-4 py-3 text-sm font-bold text-white text-center transition"
+                    >
                       🔨 Enter The Forge
                     </Link>
                   </div>
@@ -136,18 +172,27 @@ export default async function DashboardPage() {
 
             {otherProjects.length > 0 && (
               <div>
-                <p className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-3">All projects</p>
+                <p className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-3">
+                  All projects
+                </p>
                 <div className="grid gap-4 sm:grid-cols-2">
                   {otherProjects.map((project) => (
-                    <Link key={project.id} href={`/builder/${project.id}/overview`}
-                      className="block rounded-2xl border border-stone-700 bg-stone-900 p-5 transition hover:border-orange-800/50 hover:bg-stone-800">
+                    <Link
+                      key={project.id}
+                      href={`/builder/${project.id}/overview`}
+                      className="block rounded-2xl border border-stone-700 bg-stone-900 p-5 transition hover:border-orange-800/50 hover:bg-stone-800"
+                    >
                       <div className="flex items-center gap-2 mb-2">
                         <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${STATUS_COLORS[project.status] || "bg-stone-700 text-stone-300"}`}>
                           {project.status}
                         </span>
                       </div>
-                      <h3 className="font-black text-stone-100 truncate">{project.app_name || "Untitled Project"}</h3>
-                      <p className="text-stone-400 text-xs mt-1 line-clamp-2">{project.app_description || "No description yet."}</p>
+                      <h3 className="font-black text-stone-100 truncate">
+                        {project.app_name || "Untitled Project"}
+                      </h3>
+                      <p className="text-stone-400 text-xs mt-1 line-clamp-2">
+                        {project.app_description || "No description yet."}
+                      </p>
                       <div className="flex gap-3 mt-3 text-xs text-stone-600">
                         <span>{project._count.routes} pages</span>
                         <span>{project._count.features} features</span>
@@ -163,8 +208,12 @@ export default async function DashboardPage() {
           <div className="space-y-5">
             <div className="rounded-2xl border border-stone-700 bg-stone-900 overflow-hidden">
               <div className="border-b border-stone-800 bg-stone-800/50 px-5 py-4">
-                <p className="text-xs font-bold uppercase tracking-wider text-orange-400">🥋 Shang Tsung</p>
-                <h3 className="font-black text-stone-100 mt-1 text-sm">What would you like to do?</h3>
+                <p className="text-xs font-bold uppercase tracking-wider text-orange-400">
+                  🥋 Shang Tsung
+                </p>
+                <h3 className="font-black text-stone-100 mt-1 text-sm">
+                  What would you like to do?
+                </h3>
               </div>
               <div className="p-4 space-y-2">
                 <Link href="/brain-dump" className="flex items-center gap-3 rounded-xl border border-stone-700 bg-stone-800 hover:border-orange-800/50 hover:bg-stone-700 p-3.5 transition group">
@@ -174,23 +223,30 @@ export default async function DashboardPage() {
                     <p className="text-xs text-stone-500">Capture a new idea instantly</p>
                   </div>
                 </Link>
+                <Link href="/import" className="flex items-center gap-3 rounded-xl border border-stone-700 bg-stone-800 hover:border-orange-800/50 hover:bg-stone-700 p-3.5 transition group">
+                  <span className="text-xl">📥</span>
+                  <div>
+                    <p className="text-sm font-bold text-stone-100 group-hover:text-orange-400 transition">Import Code</p>
+                    <p className="text-xs text-stone-500">Upload existing project ZIP</p>
+                  </div>
+                </Link>
                 {mostRecentProject && (
-                  <Link href={`/builder/${mostRecentProject.id}/overview`} className="flex items-center gap-3 rounded-xl border border-stone-700 bg-stone-800 hover:border-orange-800/50 hover:bg-stone-700 p-3.5 transition group">
-                    <span className="text-xl">📋</span>
-                    <div className="min-w-0">
-                      <p className="text-sm font-bold text-stone-100 group-hover:text-orange-400 transition">Continue Planning</p>
-                      <p className="text-xs text-stone-500 truncate">{mostRecentProject.app_name || "Last project"}</p>
-                    </div>
-                  </Link>
-                )}
-                {mostRecentProject && (
-                  <Link href={`/builder/${mostRecentProject.id}/forge`} className="flex items-center gap-3 rounded-xl border border-stone-700 bg-stone-800 hover:border-orange-800/50 hover:bg-stone-700 p-3.5 transition group">
-                    <span className="text-xl">🔨</span>
-                    <div className="min-w-0">
-                      <p className="text-sm font-bold text-stone-100 group-hover:text-orange-400 transition">Enter The Forge</p>
-                      <p className="text-xs text-stone-500 truncate">{mostRecentProject.app_name || "Last project"}</p>
-                    </div>
-                  </Link>
+                  <>
+                    <Link href={`/builder/${mostRecentProject.id}/overview`} className="flex items-center gap-3 rounded-xl border border-stone-700 bg-stone-800 hover:border-orange-800/50 hover:bg-stone-700 p-3.5 transition group">
+                      <span className="text-xl">📋</span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-stone-100 group-hover:text-orange-400 transition">Continue Planning</p>
+                        <p className="text-xs text-stone-500 truncate">{mostRecentProject.app_name || "Last project"}</p>
+                      </div>
+                    </Link>
+                    <Link href={`/builder/${mostRecentProject.id}/forge`} className="flex items-center gap-3 rounded-xl border border-stone-700 bg-stone-800 hover:border-orange-800/50 hover:bg-stone-700 p-3.5 transition group">
+                      <span className="text-xl">🔨</span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-stone-100 group-hover:text-orange-400 transition">Enter The Forge</p>
+                        <p className="text-xs text-stone-500 truncate">{mostRecentProject.app_name || "Last project"}</p>
+                      </div>
+                    </Link>
+                  </>
                 )}
                 {canCreate && (
                   <Link href="/builder/new" className="flex items-center gap-3 rounded-xl border border-stone-700 bg-stone-800 hover:border-orange-800/50 hover:bg-stone-700 p-3.5 transition group">
@@ -226,7 +282,10 @@ export default async function DashboardPage() {
                       <span>{projectCount}/{limit}</span>
                     </div>
                     <div className="w-full bg-stone-800 rounded-full h-1.5">
-                      <div className="bg-orange-600 h-1.5 rounded-full transition-all" style={{ width: `${Math.min((projectCount / (limit as number)) * 100, 100)}%` }} />
+                      <div
+                        className="bg-orange-600 h-1.5 rounded-full transition-all"
+                        style={{ width: `${Math.min((projectCount / (limit as number)) * 100, 100)}%` }}
+                      />
                     </div>
                   </div>
                 )}
