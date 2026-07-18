@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import CodeViewer from "@/components/CodeViewer";
+import { useShangTsungHabits } from "@/hooks/useShangTsungHabits";
 
 interface ProjectFile {
   id: string;
@@ -66,8 +67,10 @@ export default function ForgeWorkspace({
   projectName: string;
   initialFiles: ProjectFile[];
 }) {
+  const habits = useShangTsungHabits(projectId);
+
   const [files, setFiles] = useState<ProjectFile[]>(initialFiles || []);
-  const [selectedFile, setSelectedFile] = useState<ProjectFile | null>(initialFiles?.[0] || null);
+  const [selectedFile, setSelectedFile] = useState<ProjectFile | null>(null);
   const [generating, setGenerating] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
@@ -85,11 +88,59 @@ export default function ForgeWorkspace({
   const [copied, setCopied] = useState(false);
   const chatBottomRef = useRef<HTMLDivElement>(null);
 
+  // Apply saved habits on load
+  useEffect(() => {
+    if (!habits.loaded) return;
+
+    // Restore panel state
+    setShangCollapsed(habits.panelState.shangCollapsed);
+    setExplorerCollapsed(habits.panelState.explorerCollapsed);
+
+    // Restore preferred view mode
+    setViewMode(habits.preferredViewMode);
+
+    // Select most-used file if files exist
+    if (initialFiles.length > 0) {
+      const mostUsed = habits.getMostUsedFilePath();
+      const preferred = mostUsed
+        ? initialFiles.find((f) => f.file_path === mostUsed)
+        : null;
+      setSelectedFile(preferred || initialFiles[0]);
+    }
+
+    // Show habit-aware greeting after 3+ sessions
+    const summary = habits.getHabitSummary();
+    if (summary && habits.totalSessions >= 3) {
+      setShangMessages([
+        {
+          role: "assistant",
+          message: `Welcome back, Founder.\n\n${summary}\n\nWhat are we building today?`,
+        },
+      ]);
+    }
+  }, [habits.loaded]);
+
+  // Sync panel state to habits when it changes
+  useEffect(() => {
+    if (habits.loaded) {
+      habits.trackPanelState(shangCollapsed, explorerCollapsed);
+    }
+  }, [shangCollapsed, explorerCollapsed, habits.loaded]);
+
+  // Sync view mode to habits
+  useEffect(() => {
+    if (habits.loaded) {
+      habits.trackViewMode(viewMode);
+    }
+  }, [viewMode, habits.loaded]);
+
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [shangMessages]);
 
-  const visibleChips = showAllChips ? FORGE_CHIPS : FORGE_CHIPS.slice(0, 4);
+  // Sort chips by usage habits
+  const sortedChips = habits.sortChipsByHabits(FORGE_CHIPS);
+  const visibleChips = showAllChips ? sortedChips : sortedChips.slice(0, 4);
 
   async function handleGenerate() {
     if (generating) return;
@@ -104,6 +155,7 @@ export default function ForgeWorkspace({
       setSelectedFile(data.files?.[0] || null);
       setPreviewKey((k) => k + 1);
       setViewMode("preview");
+      habits.trackViewMode("preview");
       setNotice({ type: "success", text: `Generated ${data.filesGenerated ?? data.files?.length} files.` });
       setShangMessages((prev) => [...prev, {
         role: "assistant",
@@ -135,6 +187,12 @@ export default function ForgeWorkspace({
   async function handleShangSend(messageText?: string) {
     const txt = messageText || shangInput.trim();
     if (!txt || shangThinking) return;
+
+    // Track chip usage for habit learning
+    if (messageText) {
+      habits.trackChipUsed(messageText);
+    }
+
     setShangInput("");
     setShangMessages((prev) => [...prev, { role: "user", message: txt }]);
     setShangThinking(true);
@@ -172,6 +230,13 @@ export default function ForgeWorkspace({
     } finally { setShangThinking(false); }
   }
 
+  function handleFileSelect(file: ProjectFile) {
+    setSelectedFile(file);
+    setViewMode("code");
+    habits.trackFileOpened(file.file_path);
+    habits.trackViewMode("code");
+  }
+
   async function handleCopyFile() {
     if (!selectedFile) return;
     await navigator.clipboard.writeText(selectedFile.content);
@@ -180,6 +245,9 @@ export default function ForgeWorkspace({
   }
 
   const hasFiles = files.length > 0;
+
+  // Habit indicator badge
+  const showHabitBadge = habits.totalSessions >= 3;
 
   // Full Screen Mode
   if (isFullScreen) {
@@ -212,8 +280,21 @@ export default function ForgeWorkspace({
         <aside className="flex w-[300px] shrink-0 flex-col border-r border-stone-800 bg-stone-900">
           <div className="border-b border-stone-800 bg-stone-950 px-4 py-3 flex items-center justify-between">
             <div>
-              <p className="text-xs font-black uppercase tracking-wider text-orange-400">🥋 Shang Tsung</p>
-              <p className="text-xs text-stone-500 mt-0.5">Code Editor</p>
+              <div className="flex items-center gap-2">
+                <p className="text-xs font-black uppercase tracking-wider text-orange-400">
+                  🥋 Shang Tsung
+                </p>
+                {showHabitBadge && (
+                  <span className="text-xs bg-orange-900/40 border border-orange-800/50 text-orange-400 px-1.5 py-0.5 rounded font-bold">
+                    Learned
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-stone-500 mt-0.5">
+                {showHabitBadge
+                  ? `Session #${habits.totalSessions} · Habits active`
+                  : "Code Editor"}
+              </p>
             </div>
             <button type="button" onClick={() => setShangCollapsed(true)}
               className="rounded-lg border border-stone-700 hover:bg-stone-800 px-2 py-1 text-xs text-stone-400 hover:text-stone-100 transition">
@@ -248,19 +329,43 @@ export default function ForgeWorkspace({
 
           <div className="px-3 pb-2">
             <div className="flex items-center justify-between mb-1.5">
-              <p className="text-xs text-stone-500 font-black uppercase tracking-wider">Quick Commands</p>
-              <button onClick={() => setShowAllChips(!showAllChips)} className="text-xs text-stone-500 hover:text-stone-300 transition">
+              <div className="flex items-center gap-2">
+                <p className="text-xs text-stone-500 font-black uppercase tracking-wider">
+                  Quick Commands
+                </p>
+                {showHabitBadge && (
+                  <span className="text-xs text-orange-500" title="Sorted by your usage habits">
+                    ↑ sorted
+                  </span>
+                )}
+              </div>
+              <button onClick={() => setShowAllChips(!showAllChips)}
+                className="text-xs text-stone-500 hover:text-stone-300 transition">
                 {showAllChips ? "Less" : "More"}
               </button>
             </div>
             <div className="flex flex-wrap gap-1.5">
-              {visibleChips.map((chip, i) => (
-                <button key={i} onClick={() => handleShangSend(chip.message)} disabled={shangThinking}
-                  className="flex items-center gap-1 rounded-lg border border-stone-700 bg-stone-950 hover:border-orange-700 hover:bg-stone-800 disabled:opacity-50 px-2 py-1.5 text-xs font-medium text-stone-300 hover:text-stone-100 transition-all">
-                  <span>{chip.icon}</span>
-                  <span>{chip.label}</span>
-                </button>
-              ))}
+              {visibleChips.map((chip, i) => {
+                const usageCount = habits.session.chipUsage[chip.message]?.count || 0;
+                return (
+                  <button key={i}
+                    onClick={() => handleShangSend(chip.message)}
+                    disabled={shangThinking}
+                    className={`flex items-center gap-1 rounded-lg border disabled:opacity-50 px-2 py-1.5 text-xs font-medium transition-all ${
+                      usageCount > 2
+                        ? "border-orange-800/60 bg-orange-900/20 text-orange-300 hover:border-orange-600 hover:bg-orange-900/30"
+                        : "border-stone-700 bg-stone-950 text-stone-300 hover:border-orange-700 hover:bg-stone-800 hover:text-stone-100"
+                    }`}
+                    title={usageCount > 0 ? `Used ${usageCount} time${usageCount !== 1 ? "s" : ""}` : undefined}
+                  >
+                    <span>{chip.icon}</span>
+                    <span>{chip.label}</span>
+                    {usageCount > 2 && (
+                      <span className="text-orange-500 text-xs ml-0.5">★</span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -273,7 +378,8 @@ export default function ForgeWorkspace({
               placeholder="Tell Shang Tsung what to change..."
               className="w-full bg-stone-950 border border-stone-800 rounded-lg p-2 text-sm text-stone-100 placeholder-stone-600 focus:outline-none focus:border-orange-600 resize-none"
             />
-            <button type="button" onClick={() => handleShangSend()} disabled={shangThinking || !shangInput.trim()}
+            <button type="button" onClick={() => handleShangSend()}
+              disabled={shangThinking || !shangInput.trim()}
               className="mt-1.5 w-full rounded-lg bg-orange-700 hover:bg-orange-600 disabled:opacity-50 px-3 py-2 text-sm font-black text-white transition">
               {shangThinking ? "Editing..." : "Send"}
             </button>
@@ -282,7 +388,8 @@ export default function ForgeWorkspace({
       ) : (
         <div className="flex flex-col items-center border-r border-stone-800 bg-stone-900 w-10 shrink-0">
           <button type="button" onClick={() => setShangCollapsed(false)}
-            className="w-full flex flex-col items-center gap-1 py-3 hover:bg-stone-800 transition group" title="Expand Shang Tsung">
+            className="w-full flex flex-col items-center gap-1 py-3 hover:bg-stone-800 transition group"
+            title="Expand Shang Tsung">
             <span className="text-base">🥋</span>
             <span className="text-stone-600 group-hover:text-orange-400 transition text-xs">▶</span>
           </button>
@@ -314,7 +421,9 @@ export default function ForgeWorkspace({
             </button>
             {notice && (
               <div className={`border rounded-lg p-2.5 text-xs ${
-                notice.type === "success" ? "border-emerald-800 bg-emerald-950/40 text-emerald-300" : "border-red-800 bg-red-950/40 text-red-300"
+                notice.type === "success"
+                  ? "border-emerald-800 bg-emerald-950/40 text-emerald-300"
+                  : "border-red-800 bg-red-950/40 text-red-300"
               }`}>
                 {notice.text}
               </div>
@@ -329,32 +438,43 @@ export default function ForgeWorkspace({
               </div>
             ) : (
               <ul className="space-y-0.5">
-                {files.map((f) => (
-                  <li key={f.id}>
-                    <button type="button"
-                      onClick={() => { setSelectedFile(f); setViewMode("code"); }}
-                      className={`w-full text-left flex gap-2 px-2.5 py-2 rounded-lg text-sm transition ${
-                        selectedFile?.id === f.id && viewMode === "code"
-                          ? "bg-orange-900/40 border border-orange-800/50 text-orange-300"
-                          : "text-stone-400 hover:bg-stone-800 hover:text-stone-100"
-                      }`}>
-                      <span className="shrink-0 text-xs">{getFileIcon(f.file_path)}</span>
-                      <span className="truncate font-mono text-xs">{f.file_path}</span>
-                    </button>
-                  </li>
-                ))}
+                {files.map((f) => {
+                  const openCount = habits.session.fileHistory[f.file_path]?.openCount || 0;
+                  const isFavorite = openCount >= 3;
+                  return (
+                    <li key={f.id}>
+                      <button type="button"
+                        onClick={() => handleFileSelect(f)}
+                        className={`w-full text-left flex items-center gap-2 px-2.5 py-2 rounded-lg text-sm transition ${
+                          selectedFile?.id === f.id && viewMode === "code"
+                            ? "bg-orange-900/40 border border-orange-800/50 text-orange-300"
+                            : "text-stone-400 hover:bg-stone-800 hover:text-stone-100"
+                        }`}>
+                        <span className="shrink-0 text-xs">{getFileIcon(f.file_path)}</span>
+                        <span className="truncate font-mono text-xs flex-1">{f.file_path}</span>
+                        {isFavorite && (
+                          <span className="text-orange-500 text-xs shrink-0" title={`Opened ${openCount} times`}>★</span>
+                        )}
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>
 
           <div className="border-t border-stone-800 p-2 text-center text-xs text-stone-600">
             {files.length} file{files.length !== 1 ? "s" : ""}
+            {showHabitBadge && (
+              <span className="ml-2 text-orange-600">· habits on</span>
+            )}
           </div>
         </aside>
       ) : (
         <div className="flex flex-col items-center border-r border-stone-800 bg-stone-900 w-10 shrink-0">
           <button type="button" onClick={() => setExplorerCollapsed(false)}
-            className="w-full flex flex-col items-center gap-1 py-3 hover:bg-stone-800 transition group" title="Expand File Explorer">
+            className="w-full flex flex-col items-center gap-1 py-3 hover:bg-stone-800 transition group"
+            title="Expand File Explorer">
             <span className="text-base">📁</span>
             <span className="text-stone-600 group-hover:text-stone-100 transition text-xs">▶</span>
           </button>
@@ -363,7 +483,6 @@ export default function ForgeWorkspace({
 
       {/* MAIN AREA */}
       <section className="flex flex-1 min-w-0 flex-col bg-stone-950">
-        {/* Top Bar */}
         <div className="flex h-11 items-center justify-between border-b border-stone-800 bg-stone-900 px-4 shrink-0">
           <div className="flex items-center gap-2">
             <button type="button" onClick={() => setViewMode("preview")}
@@ -400,12 +519,14 @@ export default function ForgeWorkspace({
                 ⛶ Full Screen
               </button>
             )}
-            <button type="button" onClick={() => { setShangCollapsed(true); setExplorerCollapsed(true); }}
+            <button type="button"
+              onClick={() => { setShangCollapsed(true); setExplorerCollapsed(true); }}
               className="border border-stone-700 hover:border-stone-500 bg-stone-900 hover:bg-stone-800 px-2.5 py-1.5 rounded-lg text-xs text-stone-400 hover:text-stone-100 transition">
               ⊞ Maximize
             </button>
             {(shangCollapsed || explorerCollapsed) && (
-              <button type="button" onClick={() => { setShangCollapsed(false); setExplorerCollapsed(false); }}
+              <button type="button"
+                onClick={() => { setShangCollapsed(false); setExplorerCollapsed(false); }}
                 className="border border-orange-800/50 bg-orange-900/20 hover:bg-orange-900/30 px-2.5 py-1.5 rounded-lg text-xs text-orange-400 hover:text-orange-300 transition">
                 ⊟ Restore
               </button>
@@ -413,7 +534,6 @@ export default function ForgeWorkspace({
           </div>
         </div>
 
-        {/* Content */}
         <div className="flex-1 overflow-hidden">
           {viewMode === "preview" ? (
             hasFiles ? (
