@@ -16,6 +16,9 @@ model User {
   image             String?
   emailVerified     DateTime?
   password          String?
+  github_token      String?   // GitHub OAuth access token
+  github_username   String?   // GitHub username
+  github_connected  Boolean   @default(false)
   created_at        DateTime         @default(now())
   updated_at        DateTime         @updatedAt
   name              String?
