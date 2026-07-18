@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import CodeViewer from "@/components/CodeViewer";
+import VersionHistory from "@/components/VersionHistory";
 import { useShangTsungHabits } from "@/hooks/useShangTsungHabits";
 
 interface ProjectFile {
@@ -58,6 +59,18 @@ function getFileIcon(path: string) {
   return "📎";
 }
 
+async function saveVersion(projectId: string, label: string, instruction?: string) {
+  try {
+    await fetch(`/api/projects/${projectId}/versions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label, instruction }),
+    });
+  } catch {
+    // Version saving is non-critical
+  }
+}
+
 export default function ForgeWorkspace({
   projectId,
   projectName,
@@ -79,6 +92,7 @@ export default function ForgeWorkspace({
   const [shangCollapsed, setShangCollapsed] = useState(false);
   const [explorerCollapsed, setExplorerCollapsed] = useState(false);
   const [isFullScreen, setIsFullScreen] = useState(false);
+  const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [shangMessages, setShangMessages] = useState<ChatMessage[]>([
     { role: "assistant", message: "I am Shang Tsung.\n\nTap a suggestion or type a command." },
   ]);
@@ -88,57 +102,37 @@ export default function ForgeWorkspace({
   const [copied, setCopied] = useState(false);
   const chatBottomRef = useRef<HTMLDivElement>(null);
 
-  // Apply saved habits on load
   useEffect(() => {
     if (!habits.loaded) return;
-
-    // Restore panel state
     setShangCollapsed(habits.panelState.shangCollapsed);
     setExplorerCollapsed(habits.panelState.explorerCollapsed);
-
-    // Restore preferred view mode
     setViewMode(habits.preferredViewMode);
-
-    // Select most-used file if files exist
     if (initialFiles.length > 0) {
       const mostUsed = habits.getMostUsedFilePath();
-      const preferred = mostUsed
-        ? initialFiles.find((f) => f.file_path === mostUsed)
-        : null;
+      const preferred = mostUsed ? initialFiles.find((f) => f.file_path === mostUsed) : null;
       setSelectedFile(preferred || initialFiles[0]);
     }
-
-    // Show habit-aware greeting after 3+ sessions
     const summary = habits.getHabitSummary();
     if (summary && habits.totalSessions >= 3) {
-      setShangMessages([
-        {
-          role: "assistant",
-          message: `Welcome back, Founder.\n\n${summary}\n\nWhat are we building today?`,
-        },
-      ]);
+      setShangMessages([{
+        role: "assistant",
+        message: `Welcome back, Founder.\n\n${summary}\n\nWhat are we building today?`,
+      }]);
     }
   }, [habits.loaded]);
 
-  // Sync panel state to habits when it changes
   useEffect(() => {
-    if (habits.loaded) {
-      habits.trackPanelState(shangCollapsed, explorerCollapsed);
-    }
+    if (habits.loaded) habits.trackPanelState(shangCollapsed, explorerCollapsed);
   }, [shangCollapsed, explorerCollapsed, habits.loaded]);
 
-  // Sync view mode to habits
   useEffect(() => {
-    if (habits.loaded) {
-      habits.trackViewMode(viewMode);
-    }
+    if (habits.loaded) habits.trackViewMode(viewMode);
   }, [viewMode, habits.loaded]);
 
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [shangMessages]);
 
-  // Sort chips by usage habits
   const sortedChips = habits.sortChipsByHabits(FORGE_CHIPS);
   const visibleChips = showAllChips ? sortedChips : sortedChips.slice(0, 4);
 
@@ -151,6 +145,11 @@ export default function ForgeWorkspace({
       });
       const data = await readForgeResponse(res);
       if (!res.ok) throw new Error(data.error || "Failed");
+
+      if (files.length > 0) {
+        await saveVersion(projectId, "Before regeneration", "Saved before generating new code");
+      }
+
       setFiles(data.files || []);
       setSelectedFile(data.files?.[0] || null);
       setPreviewKey((k) => k + 1);
@@ -161,6 +160,8 @@ export default function ForgeWorkspace({
         role: "assistant",
         message: `${data.filesGenerated ?? data.files?.length} files generated. What would you like to change?`,
       }]);
+
+      await saveVersion(projectId, "Initial code generation", "First generation of project code");
     } catch (e: any) {
       setNotice({ type: "error", text: e.message });
     } finally { setGenerating(false); }
@@ -187,12 +188,7 @@ export default function ForgeWorkspace({
   async function handleShangSend(messageText?: string) {
     const txt = messageText || shangInput.trim();
     if (!txt || shangThinking) return;
-
-    // Track chip usage for habit learning
-    if (messageText) {
-      habits.trackChipUsed(messageText);
-    }
-
+    if (messageText) habits.trackChipUsed(messageText);
     setShangInput("");
     setShangMessages((prev) => [...prev, { role: "user", message: txt }]);
     setShangThinking(true);
@@ -208,6 +204,8 @@ export default function ForgeWorkspace({
         message: data.reply || "Could not process that.",
       }]);
       if (data.updatedFiles?.length > 0) {
+        await saveVersion(projectId, `Before: ${txt.slice(0, 50)}`, txt);
+
         setFiles((prev) => prev.map((f) => {
           const u = data.updatedFiles.find((x: { id: string }) => x.id === f.id);
           return u ? { ...f, content: u.content } : f;
@@ -218,9 +216,16 @@ export default function ForgeWorkspace({
           return u ? { ...prev, content: u.content } : prev;
         });
         setPreviewKey((k) => k + 1);
+
+        await saveVersion(
+          projectId,
+          txt.length > 50 ? txt.slice(0, 50) + "..." : txt,
+          `Shang Tsung edited ${data.filesChanged} file${data.filesChanged === 1 ? "" : "s"}`
+        );
+
         setShangMessages((prev) => [...prev, {
           role: "assistant",
-          message: `✅ ${data.filesChanged} file${data.filesChanged === 1 ? "" : "s"} updated. Preview refreshed.`,
+          message: `✅ ${data.filesChanged} file${data.filesChanged === 1 ? "" : "s"} updated. Preview refreshed. Version saved.`,
         }]);
       }
     } catch {
@@ -244,22 +249,26 @@ export default function ForgeWorkspace({
     setTimeout(() => setCopied(false), 2000);
   }
 
-  const hasFiles = files.length > 0;
+  function handleVersionRestore(restoredFiles: ProjectFile[]) {
+    if (restoredFiles.length > 0) {
+      setFiles(restoredFiles);
+      setSelectedFile(restoredFiles[0]);
+      setPreviewKey((k) => k + 1);
+      setViewMode("preview");
+      setNotice({ type: "success", text: "Version restored successfully." });
+    }
+    setShowVersionHistory(false);
+  }
 
-  // Habit indicator badge
+  const hasFiles = files.length > 0;
   const showHabitBadge = habits.totalSessions >= 3;
 
-  // Full Screen Mode
   if (isFullScreen) {
     return (
       <div className="relative h-full w-full">
-        <iframe
-          key={previewKey}
-          src={`/api/projects/${projectId}/preview`}
-          className="h-full w-full border-0 bg-white"
-          title="Live Preview Full Screen"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-top-navigation allow-modals"
-        />
+        <iframe key={previewKey} src={`/api/projects/${projectId}/preview`}
+          className="h-full w-full border-0 bg-white" title="Live Preview Full Screen"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-top-navigation allow-modals" />
         <button type="button" onClick={() => setIsFullScreen(false)}
           className="fixed top-4 right-4 z-50 rounded-xl bg-stone-900 border border-stone-700 hover:bg-stone-800 px-4 py-2.5 text-sm font-black text-stone-100 shadow-2xl transition">
           ✕ Exit Full Screen
@@ -274,6 +283,14 @@ export default function ForgeWorkspace({
 
   return (
     <div className="flex h-full min-h-0 relative">
+
+      {/* VERSION HISTORY MODAL */}
+      <VersionHistory
+        projectId={projectId}
+        onRestore={handleVersionRestore}
+        isOpen={showVersionHistory}
+        onClose={() => setShowVersionHistory(false)}
+      />
 
       {/* SHANG TSUNG PANEL */}
       {!shangCollapsed ? (
@@ -291,9 +308,7 @@ export default function ForgeWorkspace({
                 )}
               </div>
               <p className="text-xs text-stone-500 mt-0.5">
-                {showHabitBadge
-                  ? `Session #${habits.totalSessions} · Habits active`
-                  : "Code Editor"}
+                {showHabitBadge ? `Session #${habits.totalSessions} · Habits active` : "Code Editor"}
               </p>
             </div>
             <button type="button" onClick={() => setShangCollapsed(true)}
@@ -334,9 +349,7 @@ export default function ForgeWorkspace({
                   Quick Commands
                 </p>
                 {showHabitBadge && (
-                  <span className="text-xs text-orange-500" title="Sorted by your usage habits">
-                    ↑ sorted
-                  </span>
+                  <span className="text-xs text-orange-500">↑ sorted</span>
                 )}
               </div>
               <button onClick={() => setShowAllChips(!showAllChips)}
@@ -348,21 +361,17 @@ export default function ForgeWorkspace({
               {visibleChips.map((chip, i) => {
                 const usageCount = habits.session.chipUsage[chip.message]?.count || 0;
                 return (
-                  <button key={i}
-                    onClick={() => handleShangSend(chip.message)}
+                  <button key={i} onClick={() => handleShangSend(chip.message)}
                     disabled={shangThinking}
                     className={`flex items-center gap-1 rounded-lg border disabled:opacity-50 px-2 py-1.5 text-xs font-medium transition-all ${
                       usageCount > 2
-                        ? "border-orange-800/60 bg-orange-900/20 text-orange-300 hover:border-orange-600 hover:bg-orange-900/30"
+                        ? "border-orange-800/60 bg-orange-900/20 text-orange-300 hover:border-orange-600"
                         : "border-stone-700 bg-stone-950 text-stone-300 hover:border-orange-700 hover:bg-stone-800 hover:text-stone-100"
                     }`}
-                    title={usageCount > 0 ? `Used ${usageCount} time${usageCount !== 1 ? "s" : ""}` : undefined}
-                  >
+                    title={usageCount > 0 ? `Used ${usageCount} time${usageCount !== 1 ? "s" : ""}` : undefined}>
                     <span>{chip.icon}</span>
                     <span>{chip.label}</span>
-                    {usageCount > 2 && (
-                      <span className="text-orange-500 text-xs ml-0.5">★</span>
-                    )}
+                    {usageCount > 2 && <span className="text-orange-500 text-xs ml-0.5">★</span>}
                   </button>
                 );
               })}
@@ -370,14 +379,10 @@ export default function ForgeWorkspace({
           </div>
 
           <div className="border-t border-stone-800 p-3">
-            <textarea
-              value={shangInput}
-              onChange={(e) => setShangInput(e.target.value)}
+            <textarea value={shangInput} onChange={(e) => setShangInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleShangSend(); } }}
-              rows={2}
-              placeholder="Tell Shang Tsung what to change..."
-              className="w-full bg-stone-950 border border-stone-800 rounded-lg p-2 text-sm text-stone-100 placeholder-stone-600 focus:outline-none focus:border-orange-600 resize-none"
-            />
+              rows={2} placeholder="Tell Shang Tsung what to change..."
+              className="w-full bg-stone-950 border border-stone-800 rounded-lg p-2 text-sm text-stone-100 placeholder-stone-600 focus:outline-none focus:border-orange-600 resize-none" />
             <button type="button" onClick={() => handleShangSend()}
               disabled={shangThinking || !shangInput.trim()}
               className="mt-1.5 w-full rounded-lg bg-orange-700 hover:bg-orange-600 disabled:opacity-50 px-3 py-2 text-sm font-black text-white transition">
@@ -440,11 +445,9 @@ export default function ForgeWorkspace({
               <ul className="space-y-0.5">
                 {files.map((f) => {
                   const openCount = habits.session.fileHistory[f.file_path]?.openCount || 0;
-                  const isFavorite = openCount >= 3;
                   return (
                     <li key={f.id}>
-                      <button type="button"
-                        onClick={() => handleFileSelect(f)}
+                      <button type="button" onClick={() => handleFileSelect(f)}
                         className={`w-full text-left flex items-center gap-2 px-2.5 py-2 rounded-lg text-sm transition ${
                           selectedFile?.id === f.id && viewMode === "code"
                             ? "bg-orange-900/40 border border-orange-800/50 text-orange-300"
@@ -452,8 +455,8 @@ export default function ForgeWorkspace({
                         }`}>
                         <span className="shrink-0 text-xs">{getFileIcon(f.file_path)}</span>
                         <span className="truncate font-mono text-xs flex-1">{f.file_path}</span>
-                        {isFavorite && (
-                          <span className="text-orange-500 text-xs shrink-0" title={`Opened ${openCount} times`}>★</span>
+                        {openCount >= 3 && (
+                          <span className="text-orange-500 text-xs shrink-0">★</span>
                         )}
                       </button>
                     </li>
@@ -465,9 +468,7 @@ export default function ForgeWorkspace({
 
           <div className="border-t border-stone-800 p-2 text-center text-xs text-stone-600">
             {files.length} file{files.length !== 1 ? "s" : ""}
-            {showHabitBadge && (
-              <span className="ml-2 text-orange-600">· habits on</span>
-            )}
+            {showHabitBadge && <span className="ml-2 text-orange-600">· habits on</span>}
           </div>
         </aside>
       ) : (
@@ -483,14 +484,19 @@ export default function ForgeWorkspace({
 
       {/* MAIN AREA */}
       <section className="flex flex-1 min-w-0 flex-col bg-stone-950">
+        {/* Top Bar */}
         <div className="flex h-11 items-center justify-between border-b border-stone-800 bg-stone-900 px-4 shrink-0">
           <div className="flex items-center gap-2">
             <button type="button" onClick={() => setViewMode("preview")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-black transition ${viewMode === "preview" ? "bg-orange-700 text-white" : "text-stone-400 hover:bg-stone-800"}`}>
+              className={`px-3 py-1.5 rounded-lg text-xs font-black transition ${
+                viewMode === "preview" ? "bg-orange-700 text-white" : "text-stone-400 hover:bg-stone-800"
+              }`}>
               👁 Preview
             </button>
             <button type="button" onClick={() => setViewMode("code")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-black transition ${viewMode === "code" ? "bg-orange-700 text-white" : "text-stone-400 hover:bg-stone-800"}`}>
+              className={`px-3 py-1.5 rounded-lg text-xs font-black transition ${
+                viewMode === "code" ? "bg-orange-700 text-white" : "text-stone-400 hover:bg-stone-800"
+              }`}>
               {"</>"} Code
             </button>
           </div>
@@ -498,7 +504,7 @@ export default function ForgeWorkspace({
           <div className="flex items-center gap-2">
             {viewMode === "code" && selectedFile && (
               <>
-                <span className="truncate font-mono text-xs text-stone-500 max-w-[180px]">
+                <span className="truncate font-mono text-xs text-stone-500 max-w-[150px]">
                   {selectedFile.file_path}
                 </span>
                 <button type="button" onClick={handleCopyFile}
@@ -507,23 +513,37 @@ export default function ForgeWorkspace({
                 </button>
               </>
             )}
+
             {viewMode === "preview" && hasFiles && (
               <button type="button" onClick={() => setPreviewKey((k) => k + 1)}
                 className="border border-stone-700 px-2.5 py-1.5 rounded-lg text-xs text-stone-400 hover:bg-stone-800 transition">
                 🔄 Refresh
               </button>
             )}
+
+            {/* ⏱ VERSION HISTORY BUTTON */}
+            <button
+              type="button"
+              onClick={() => setShowVersionHistory(true)}
+              className="border border-stone-700 hover:border-orange-700 bg-stone-900 hover:bg-stone-800 px-2.5 py-1.5 rounded-lg text-xs text-stone-400 hover:text-orange-400 transition"
+              title="Version History"
+            >
+              ⏱ History
+            </button>
+
             {hasFiles && viewMode === "preview" && (
               <button type="button" onClick={() => setIsFullScreen(true)}
                 className="border border-stone-700 hover:border-orange-700 bg-stone-900 hover:bg-stone-800 px-2.5 py-1.5 rounded-lg text-xs text-stone-400 hover:text-stone-100 transition">
                 ⛶ Full Screen
               </button>
             )}
+
             <button type="button"
               onClick={() => { setShangCollapsed(true); setExplorerCollapsed(true); }}
               className="border border-stone-700 hover:border-stone-500 bg-stone-900 hover:bg-stone-800 px-2.5 py-1.5 rounded-lg text-xs text-stone-400 hover:text-stone-100 transition">
               ⊞ Maximize
             </button>
+
             {(shangCollapsed || explorerCollapsed) && (
               <button type="button"
                 onClick={() => { setShangCollapsed(false); setExplorerCollapsed(false); }}
@@ -534,11 +554,11 @@ export default function ForgeWorkspace({
           </div>
         </div>
 
+        {/* Content */}
         <div className="flex-1 overflow-hidden">
           {viewMode === "preview" ? (
             hasFiles ? (
-              <iframe
-                key={previewKey}
+              <iframe key={previewKey}
                 src={`/api/projects/${projectId}/preview`}
                 className="h-full w-full border-0 bg-white"
                 title="Live Preview"
