@@ -1,22 +1,35 @@
-// Shang Tsung Code Editor Service
-// Mock mode: pattern-matches instructions and modifies code directly.
-// Flip USE_MOCK to false when OpenAI funds arrive for intelligent editing.
+import { OpenAI } from "openai";
 
-const USE_MOCK = true;
+const USE_MOCK = false;
 
-interface EditInput {
+export interface EditInputFile {
+  id: string;
+  file_path: string;
+  content: string;
+  language: string;
+}
+
+export interface EditInput {
   instruction: string;
-  files: Array<{
-    id: string;
-    file_path: string;
-    content: string;
-    language: string;
-  }>;
+  files: EditInputFile[];
+}
+
+export interface UpdatedFile {
+  id: string;
+  file_path: string;
+  content: string;
+}
+
+export interface NewFile {
+  file_path: string;
+  content: string;
+  language: string;
 }
 
 export interface EditResult {
   reply: string;
-  updatedFiles: Array<{ id: string; file_path: string; content: string }>;
+  updatedFiles: UpdatedFile[];
+  newFiles: NewFile[];
 }
 
 export async function editProjectCode(input: EditInput): Promise<EditResult> {
@@ -28,322 +41,218 @@ export async function editProjectCode(input: EditInput): Promise<EditResult> {
 
 function mockEditCode(input: EditInput): EditResult {
   const raw = input.instruction.toLowerCase().trim();
-  const updated: Array<{ id: string; file_path: string; content: string }> = [];
+  const updated: UpdatedFile[] = [];
+  const newFiles: NewFile[] = [];
 
-  // Helper: find files by path
-  const file = (path: string) => input.files.find((f) => f.file_path === path);
+  const file = (path: string) =>
+    input.files.find((f) => f.file_path.toLowerCase() === path.toLowerCase());
   const home = file("app/page.tsx");
-  const nav = file("components/Navigation.tsx");
-  const layout = file("app/layout.tsx");
-  const readme = file("README.md");
 
-  // Helper: push update
-  function push(f: typeof home, newContent: string) {
+  function pushUpdate(f: EditInputFile | undefined, newContent: string): boolean {
     if (!f) return false;
     updated.push({ id: f.id, file_path: f.file_path, content: newContent });
     return true;
   }
 
-  // ─── HERO COLORS ───────────────────────────────────────────────────────────
-  if (raw.includes("hero") && raw.includes("orange")) {
-    if (push(home, home!.content.replace(/from-\S+ to-\S+/g, "from-orange-400 to-orange-600")))
-      return { reply: "Done. The hero title is now orange. Preview refreshed. ✅", updatedFiles: updated };
-  }
-  if (raw.includes("hero") && raw.includes("blue")) {
-    if (push(home, home!.content.replace(/from-\S+ to-\S+/g, "from-blue-400 to-blue-600")))
-      return { reply: "Done. The hero title is now blue. Preview refreshed. ✅", updatedFiles: updated };
-  }
-  if (raw.includes("hero") && raw.includes("green")) {
-    if (push(home, home!.content.replace(/from-\S+ to-\S+/g, "from-emerald-400 to-emerald-600")))
-      return { reply: "Done. The hero title is now green. Preview refreshed. ✅", updatedFiles: updated };
-  }
-  if (raw.includes("hero") && raw.includes("purple")) {
-    if (push(home, home!.content.replace(/from-\S+ to-\S+/g, "from-purple-400 to-purple-600")))
-      return { reply: "Done. The hero title is now purple. Preview refreshed. ✅", updatedFiles: updated };
-  }
-  if (raw.includes("hero") && raw.includes("white")) {
-    if (push(home, home!.content.replace(/from-\S+ to-\S+/g, "from-white to-slate-200")))
-      return { reply: "Done. The hero title is now white. Preview refreshed. ✅", updatedFiles: updated };
-  }
-  if (raw.includes("hero") && raw.includes("red")) {
-    if (push(home, home!.content.replace(/from-\S+ to-\S+/g, "from-red-400 to-red-600")))
-      return { reply: "Done. The hero title is now red. Preview refreshed. ✅", updatedFiles: updated };
-  }
-  if (raw.includes("hero") && raw.includes("gold") || raw.includes("hero") && raw.includes("yellow")) {
-    if (push(home, home!.content.replace(/from-\S+ to-\S+/g, "from-yellow-400 to-amber-500")))
-      return { reply: "Done. The hero title is now gold. Preview refreshed. ✅", updatedFiles: updated };
-  }
-
-  // ─── BUTTON COLORS ─────────────────────────────────────────────────────────
-  if (raw.includes("button") && raw.includes("green")) {
-    if (push(home, home!.content.replace(/bg-orange-600 hover:bg-orange-500/g, "bg-emerald-600 hover:bg-emerald-500")))
-      return { reply: "Done. The primary button is now green. Preview refreshed. ✅", updatedFiles: updated };
-  }
-  if (raw.includes("button") && raw.includes("blue")) {
-    if (push(home, home!.content.replace(/bg-orange-600 hover:bg-orange-500/g, "bg-blue-600 hover:bg-blue-500")))
-      return { reply: "Done. The primary button is now blue. Preview refreshed. ✅", updatedFiles: updated };
-  }
-  if (raw.includes("button") && raw.includes("orange")) {
-    if (push(home, home!.content.replace(/bg-\w+-600 hover:bg-\w+-500/g, "bg-orange-600 hover:bg-orange-500")))
-      return { reply: "Done. The primary button is now orange. Preview refreshed. ✅", updatedFiles: updated };
-  }
-  if (raw.includes("button") && raw.includes("purple")) {
-    if (push(home, home!.content.replace(/bg-orange-600 hover:bg-orange-500/g, "bg-purple-600 hover:bg-purple-500")))
-      return { reply: "Done. The primary button is now purple. Preview refreshed. ✅", updatedFiles: updated };
-  }
-  if (raw.includes("button") && raw.includes("red")) {
-    if (push(home, home!.content.replace(/bg-orange-600 hover:bg-orange-500/g, "bg-red-600 hover:bg-red-500")))
-      return { reply: "Done. The primary button is now red. Preview refreshed. ✅", updatedFiles: updated };
-  }
-
-  // ─── BACKGROUND COLORS ─────────────────────────────────────────────────────
-  if (raw.includes("background") && (raw.includes("darker") || raw.includes("dark"))) {
-    if (push(home, home!.content.replace(/bg-slate-900/g, "bg-slate-950")))
-      return { reply: "Done. The background is now darker. Preview refreshed. ✅", updatedFiles: updated };
-  }
-  if (raw.includes("background") && (raw.includes("lighter") || raw.includes("light") || raw.includes("white"))) {
-    const updated2 = home!.content.replace(/bg-slate-950/g, "bg-slate-100").replace(/text-white/g, "text-slate-900").replace(/bg-slate-900/g, "bg-white");
-    if (push(home, updated2))
-      return { reply: "Done. The background is now light. Preview refreshed. ✅", updatedFiles: updated };
-  }
-
-  // ─── HEADING SIZE ──────────────────────────────────────────────────────────
-  if ((raw.includes("heading") || raw.includes("title")) && (raw.includes("larger") || raw.includes("bigger") || raw.includes("large") || raw.includes("big"))) {
-    if (push(home, home!.content.replace(/text-6xl font-extrabold/g, "text-8xl font-black")))
-      return { reply: "Done. The heading is now larger. Preview refreshed. ✅", updatedFiles: updated };
-  }
-  if ((raw.includes("heading") || raw.includes("title")) && (raw.includes("smaller") || raw.includes("small"))) {
-    if (push(home, home!.content.replace(/text-6xl font-extrabold|text-8xl font-black/g, "text-4xl font-bold")))
-      return { reply: "Done. The heading is now smaller. Preview refreshed. ✅", updatedFiles: updated };
-  }
-
-  // ─── NAVIGATION ────────────────────────────────────────────────────────────
-  if ((raw.includes("nav") || raw.includes("navigation") || raw.includes("header")) && (raw.includes("remove") || raw.includes("hide") || raw.includes("delete"))) {
-    if (push(nav, "// Navigation hidden by Shang Tsung\nexport default function Navigation() { return null; }"))
-      return { reply: "Done. The navigation has been hidden. Preview refreshed. ✅", updatedFiles: updated };
-  }
-  if ((raw.includes("nav") || raw.includes("navigation")) && (raw.includes("dark") || raw.includes("black"))) {
-    if (push(nav, nav!.content.replace(/bg-slate-900/g, "bg-black").replace(/border-slate-800/g, "border-slate-900")))
-      return { reply: "Done. The navigation is now black. Preview refreshed. ✅", updatedFiles: updated };
-  }
-
-  // ─── FOOTER ────────────────────────────────────────────────────────────────
-  if (raw.includes("footer") && (raw.includes("remove") || raw.includes("hide") || raw.includes("delete"))) {
-    if (layout) {
-      const updated2 = layout.content.replace(/<footer[\s\S]*?<\/footer>/g, "<!-- Footer removed by Shang Tsung -->");
-      if (push(layout, updated2))
-        return { reply: "Done. The footer has been removed. Preview refreshed. ✅", updatedFiles: updated };
-    }
-  }
-
-  // ─── ADD PRICING SECTION ───────────────────────────────────────────────────
-  if (raw.includes("pricing") && (raw.includes("add") || raw.includes("create") || raw.includes("section"))) {
-    if (home) {
-      const pricingSection = `
-      {/* Pricing Section - Added by Shang Tsung */}
-      <section className="max-w-5xl mx-auto px-6 py-16 border-t border-slate-900">
-        <h2 className="text-4xl font-bold mb-10 text-center">Pricing Plans</h2>
-        <div className="grid gap-6 md:grid-cols-3">
-          {["Free", "Pro", "Business"].map((plan, i) => (
-            <div key={plan} className={\`p-8 rounded-2xl border \${i === 1 ? "border-orange-700 bg-orange-950/20" : "border-slate-800 bg-slate-900"}\`}>
-              <h3 className="text-xl font-bold mb-2">{plan}</h3>
-              <p className="text-3xl font-black mb-6">{i === 0 ? "$0" : i === 1 ? "$19" : "$49"}<span className="text-sm text-slate-400">/mo</span></p>
-              <button className={\`w-full py-3 rounded-xl font-semibold text-sm \${i === 1 ? "bg-orange-600 hover:bg-orange-500" : "border border-slate-700 hover:bg-slate-900"} transition\`}>
-                Get Started
-              </button>
-            </div>
-          ))}
-        </div>
-      </section>`;
-      const insertPoint = home.content.lastIndexOf("</main>");
-      const updated2 = home.content.slice(0, insertPoint) + pricingSection + home.content.slice(insertPoint);
-      if (push(home, updated2))
-        return { reply: "Done. A 3-tier pricing section has been added to the homepage. Preview refreshed. ✅", updatedFiles: updated };
-    }
-  }
-
-  // ─── ADD TESTIMONIALS SECTION ──────────────────────────────────────────────
-  if (raw.includes("testimonial") || raw.includes("review") || raw.includes("feedback")) {
-    if (home) {
-      const testimonialSection = `
-      {/* Testimonials - Added by Shang Tsung */}
-      <section className="max-w-5xl mx-auto px-6 py-16 border-t border-slate-900">
-        <h2 className="text-4xl font-bold mb-10 text-center">What People Are Saying</h2>
-        <div className="grid gap-6 md:grid-cols-3">
-          {[
-            { name: "Alex M.", text: "This app changed how I build software. Incredible." },
-            { name: "Sarah K.", text: "Finally an app builder that actually works." },
-            { name: "James R.", text: "Built my startup app in one afternoon. Mind-blowing." }
-          ].map((t) => (
-            <div key={t.name} className="p-6 rounded-2xl border border-slate-800 bg-slate-900">
-              <p className="text-slate-300 text-sm mb-4">"{t.text}"</p>
-              <p className="font-bold text-sm text-orange-400">— {t.name}</p>
-            </div>
-          ))}
-        </div>
-      </section>`;
-      const insertPoint = home.content.lastIndexOf("</main>");
-      const updated2 = home.content.slice(0, insertPoint) + testimonialSection + home.content.slice(insertPoint);
-      if (push(home, updated2))
-        return { reply: "Done. A testimonials section has been added. Preview refreshed. ✅", updatedFiles: updated };
-    }
-  }
-
-  // ─── ADD FAQ SECTION ───────────────────────────────────────────────────────
-  if (raw.includes("faq") || raw.includes("frequently asked") || raw.includes("questions")) {
-    if (home) {
-      const faqSection = `
-      {/* FAQ - Added by Shang Tsung */}
-      <section className="max-w-3xl mx-auto px-6 py-16 border-t border-slate-900">
-        <h2 className="text-4xl font-bold mb-10 text-center">Frequently Asked Questions</h2>
-        <div className="space-y-4">
-          {[
-            { q: "Do I need coding experience?", a: "No. Describe your idea in plain language and the AI handles the rest." },
-            { q: "Can I download my code?", a: "Yes. Every generated project can be downloaded as a complete ZIP file." },
-            { q: "Is my code mine?", a: "100%. You own everything you generate. No lock-in, no restrictions." },
-          ].map((item) => (
-            <div key={item.q} className="border border-slate-800 bg-slate-900 rounded-xl p-6">
-              <p className="font-bold mb-2">{item.q}</p>
-              <p className="text-sm text-slate-400">{item.a}</p>
-            </div>
-          ))}
-        </div>
-      </section>`;
-      const insertPoint = home.content.lastIndexOf("</main>");
-      const updated2 = home.content.slice(0, insertPoint) + faqSection + home.content.slice(insertPoint);
-      if (push(home, updated2))
-        return { reply: "Done. A FAQ section has been added. Preview refreshed. ✅", updatedFiles: updated };
-    }
-  }
-
-  // ─── RENAME APP ────────────────────────────────────────────────────────────
-  const renameMatch = raw.match(/rename.*?to\s+"?([^"]+)"?$/) || raw.match(/change.*?name.*?to\s+"?([^"]+)"?$/);
-  if (renameMatch) {
-    const newName = renameMatch[1].trim();
-    const capitalised = newName.charAt(0).toUpperCase() + newName.slice(1);
-    let changed = false;
-    if (home) { push(home, home.content.replace(/[A-Z][a-zA-Z\s]+(?=<\/h1>)/g, capitalised)); changed = true; }
-    if (nav) { push(nav, nav.content.replace(/<span[^>]*>[^<]+<\/span>/g, `<span>${capitalised}</span>`)); }
-    if (changed) return { reply: `Done. The app has been renamed to "${capitalised}". Preview refreshed. ✅`, updatedFiles: updated };
-  }
-
-  // ─── FONT CHANGES ──────────────────────────────────────────────────────────
-  if (raw.includes("font") && raw.includes("mono")) {
-    if (push(home, home!.content.replace(/font-sans/g, "font-mono")))
-      return { reply: "Done. The font is now monospace. Preview refreshed. ✅", updatedFiles: updated };
-  }
-  if (raw.includes("font") && (raw.includes("sans") || raw.includes("normal"))) {
-    if (push(home, home!.content.replace(/font-mono/g, "font-sans")))
-      return { reply: "Done. The font is now sans-serif. Preview refreshed. ✅", updatedFiles: updated };
-  }
-
-  // ─── ROUNDED CORNERS ───────────────────────────────────────────────────────
-  if (raw.includes("round") && (raw.includes("more") || raw.includes("full"))) {
-    if (push(home, home!.content.replace(/rounded-xl/g, "rounded-3xl").replace(/rounded-2xl/g, "rounded-3xl")))
-      return { reply: "Done. Corners are now more rounded. Preview refreshed. ✅", updatedFiles: updated };
-  }
-  if (raw.includes("round") && (raw.includes("less") || raw.includes("sharp") || raw.includes("square"))) {
-    if (push(home, home!.content.replace(/rounded-3xl/g, "rounded-lg").replace(/rounded-2xl/g, "rounded-lg").replace(/rounded-xl/g, "rounded-lg")))
-      return { reply: "Done. Corners are now sharper. Preview refreshed. ✅", updatedFiles: updated };
-  }
-
-  // ─── SPACING ───────────────────────────────────────────────────────────────
-  if (raw.includes("more space") || raw.includes("more padding") || raw.includes("spacing")) {
-    if (push(home, home!.content.replace(/py-16/g, "py-24").replace(/py-20/g, "py-32").replace(/mb-6/g, "mb-10")))
-      return { reply: "Done. Spacing has been increased. Preview refreshed. ✅", updatedFiles: updated };
-  }
-
-  // ─── INFO COMMANDS ─────────────────────────────────────────────────────────
-  if (raw.includes("what files") || raw.includes("list files") || raw.includes("show files")) {
-    const list = input.files.map((f) => `• ${f.file_path} (${f.language})`).join("\n");
-    return { reply: `Here are your generated files:\n\n${list}\n\nTell me which one to modify.`, updatedFiles: [] };
-  }
-
-  if (raw.includes("what can you do") || raw.includes("help") || raw.includes("commands")) {
+  if (raw.includes("logo") || raw.includes("graphic") || raw.includes("svg")) {
+    newFiles.push({
+      file_path: "components/Logo.tsx",
+      language: "typescript",
+      content: [
+        `export default function Logo({ className = "w-8 h-8" }: { className?: string }) {`,
+        `  return (`,
+        `    <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>`,
+        `      <defs>`,
+        `        <linearGradient id="lovableGlow" x1="0%" y1="0%" x2="100%" y2="100%">`,
+        `          <stop offset="0%" stopColor="#f97316" />`,
+        `          <stop offset="50%" stopColor="#ec4899" />`,
+        `          <stop offset="100%" stopColor="#6366f1" />`,
+        `        </linearGradient>`,
+        `      </defs>`,
+        `      <circle cx="50" cy="50" r="46" fill="url(#lovableGlow)" fill-opacity="0.15" stroke="url(#lovableGlow)" stroke-width="4" />`,
+        `      <path d="M32 68L48 28L68 68L50 54L32 68Z" fill="url(#lovableGlow)" />`,
+        `      <circle cx="50" cy="38" r="6" fill="#ffffff" />`,
+        `    </svg>`,
+        `  );`,
+        `}`,
+      ].join("\n"),
+    });
     return {
       reply: [
-        "Here is what I can do:\n",
-        "🎨 COLORS",
-        "• Change the hero color to orange/blue/green/purple/red/gold",
-        "• Make the button green/blue/orange/purple/red",
-        "• Make the background dark/light\n",
-        "📐 LAYOUT",
-        "• Make the heading larger/smaller",
-        "• Make the corners more/less rounded",
-        "• Add more spacing/padding\n",
-        "🧩 SECTIONS",
-        "• Add a pricing section",
-        "• Add a testimonials section",
-        "• Add a FAQ section\n",
-        "🔧 STRUCTURE",
-        "• Hide the navigation",
-        "• Remove the footer",
-        "• Rename the app to [new name]",
-        "• Change the font to mono/sans\n",
-        "📋 INFO",
-        "• What files exist?",
-        "• What can you do?",
+        "Created high-end vector SVG brand logo (`components/Logo.tsx`) with dynamic gradient geometry and glow paths! ✅",
+        "",
+        "💡 PROACTIVE ARCHITECT SUGGESTION: Next, let's import `<Logo className=\"w-9 h-9\" />` into `components/Navigation.tsx` so your brand identity anchors every page of your application!",
       ].join("\n"),
       updatedFiles: [],
+      newFiles,
     };
   }
 
-  // ─── DEFAULT ───────────────────────────────────────────────────────────────
   return {
     reply: [
-      "I didn't recognise that specific command.",
+      "I am Shang Tsung, your AI Dojo Master.",
+      "Tell me what visual upgrades, logos, pages, or security features to apply!",
       "",
-      "Try these examples:",
-      "• \"Change the hero color to orange\"",
-      "• \"Add a pricing section\"",
-      "• \"Make the button green\"",
-      "• \"What can you do?\" — for the full list",
+      "💡 PROACTIVE ARCHITECT SUGGESTION: Ask me to create a custom vector brand logo (`components/Logo.tsx`) or an interactive SaaS pricing calculator!",
     ].join("\n"),
     updatedFiles: [],
+    newFiles: [],
   };
 }
 
-// REAL AI EDITOR — Activates when USE_MOCK = false
 async function realAIEditCode(input: EditInput): Promise<EditResult> {
-  const { default: OpenAI } = await import("openai");
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return {
+      reply: "OpenAI API Key (`OPENAI_API_KEY`) is missing in `.env`. Please add your key to unlock real AI editing.",
+      updatedFiles: [],
+      newFiles: [],
+    };
+  }
+
+  const openai = new OpenAI({ apiKey });
 
   const fileList = input.files
-    .map((f) => `File: ${f.file_path}\n\`\`\`\n${f.content}\n\`\`\``)
+    .map((f) => `=== FILE: ${f.file_path} ===\n${f.content}`)
     .join("\n\n");
 
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [
-      {
-        role: "system",
-        content: `You are Shang Tsung, a code editor AI inside App Builder Studio by S2KDOTZA Entertainment.
-You receive Next.js + Tailwind code files and an edit instruction.
-Respond with ONLY valid JSON:
-{
-  "reply": "What you changed and why",
-  "updatedFiles": [{ "file_path": "app/page.tsx", "content": "full file content" }]
-}
-Only include changed files. Return complete file content, never partial.`,
-      },
-      {
-        role: "user",
-        content: `Instruction: "${input.instruction}"\n\nFiles:\n${fileList}`,
-      },
-    ],
-    response_format: { type: "json_object" },
-    temperature: 0.3,
-  });
+  const systemPrompt = [
+    "You are Shang Tsung, the elite AI Architect, Security Expert, and Design Mastermind inside App Builder Studio by S2KDOTZA Entertainment.",
+    "Your output must match the breathtaking, production-ready aesthetic of elite AI builders like Lovable, v0, and Bolt.",
+    "",
+    "INTERNAL MULTI-AGENT ORCHESTRATION & SUPERPOWERS PROTOCOL:",
+    "Before emitting code, your internal engine MUST execute five virtual verification passes:",
+    "1. ARCHITECT PASS: Ensure strict component modularity, clear separation of concerns, and correct Next.js App Router syntax (`app/[route]/page.tsx`). ALWAYS use standard function declarations (`export default function ComponentName() { return (...) }`) — NEVER use arrow functions (`const Comp = () =>`) for top-level exported components or pages to guarantee clean AST compilation.",
+    "2. LOVABLE DESIGN SYSTEM PASS: Apply modern UI/UX design excellence to every page and component:",
+    "   - Color Spectrum & Depth: Use rich, multi-tone dark palettes (bg-[#09090b], bg-zinc-950, bg-slate-950). Add ambient background glows (bg-gradient-to-tr from-orange-500/15 via-purple-500/10 to-transparent blur-[120px]).",
+    "   - Glassmorphism & Cards: Style containers with modern glass aesthetics (border border-white/10 bg-white/[0.03] backdrop-blur-md rounded-2xl shadow-2xl).",
+    "   - Typography Scale: Use high-contrast headings (font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-white via-zinc-200 to-zinc-400) and clean, readable zinc/slate body text.",
+    "   - Micro-Interactions: Buttons and cards must have smooth hover states (transition-all duration-300 hover:-translate-y-1 hover:shadow-orange-500/20 hover:border-white/20).",
+    "3. GRAPHICS & LOGO VECTOR SUPERPOWER (HIGH-END DESIGN):",
+    "   - You possess the ultimate capability to create vector graphics, brand logos, hero illustrations, and UI iconography directly inside React using clean inline SVG vector geometry (`<svg viewBox=\"...\">`).",
+    "   - When the user asks for a logo, graphic, or visual illustration (so they can create logos for their customers!), you MUST create dedicated React vector components (`components/Logo.tsx`, `components/HeroGraphic.tsx`) featuring glowing `<defs><linearGradient>...</linearGradient></defs>`, crisp `<path />` curves, geometric `<circle />` / `<rect />` layers, and customizable props (`{ className = \"w-10 h-10\" }`). Always write them as `export default function Logo({ className = \"w-8 h-8\" }: { className?: string }) { return (...) }`.",
+    "4. USER-CENTRIC FLOW & PROACTIVE SUGGESTIONS:",
+    "   - You must deeply understand the founder's workflow. At the very end of your `reply` string, you MUST ALWAYS include a dedicated section titled:",
+    "     `💡 PROACTIVE ARCHITECT SUGGESTION:` followed by 1 or 2 specific, high-value recommendations on what the founder should ask you to build next to make their app convert better, run faster, or look more professional.",
+    "5. STRICT CLEANUP & DELETION ENFORCEMENT: When instructed to clean up, replace, or remove old/unwanted text or headers from a file, you MUST do a thorough, clean rewrite of that file without leaving obsolete remnants behind.",
+    "",
+    "CRITICAL CODE RULES:",
+    "1. Return ONLY valid JSON matching the exact schema below — no markdown ticks outside JSON, no conversational preambles.",
+    "2. For updatedFiles: provide the COMPLETE modified file content for every existing file. Never return truncated snippets or placeholders (`// rest of code here` is STRICTLY FORBIDDEN).",
+    "3. For newFiles: when instructed to create new pages (`app/pricing/page.tsx`) or components (`components/Logo.tsx`, `components/Footer.tsx`), return complete, beautifully styled Lovable-grade source code using `export default function ComponentName()` syntax.",
+    "4. If an instruction requires editing MULTIPLE files (`app/page.tsx` AND `components/Navigation.tsx`), return BOTH complete files in updatedFiles.",
+    "5. When modifying app/layout.tsx, NEVER remove the {children} placeholder.",
+    "",
+    "Required JSON Response Format:",
+    "{",
+    '  "reply": "Authoritative, professional summary explaining what architectural, logo, or visual enhancements were executed\\n\\n💡 PROACTIVE ARCHITECT SUGGESTION: Specific recommendation for what the user should build or refine next.",',
+    '  "updatedFiles": [',
+    "    {",
+    '      "file_path": "app/page.tsx",',
+    '      "content": "COMPLETE FULL FILE CONTENT HERE"',
+    "    }",
+    "  ],",
+    '  "newFiles": [',
+    "    {",
+    '      "file_path": "components/Logo.tsx",',
+    '      "content": "COMPLETE FULL FILE CONTENT HERE",',
+    '      "language": "typescript"',
+    "    }",
+    "  ]",
+    "}",
+  ].join("\n");
 
-  const result = JSON.parse(response.choices[0]?.message?.content || "{}");
+  const userMessage = [
+    `Instruction: "${input.instruction}"`,
+    "",
+    "Project's Current Files:",
+    fileList,
+    "",
+    "Remember: Return ONLY valid JSON with complete file contents. Execute all upgrades with elite Lovable design standards, vector SVG logo mastery using standard function declarations, and always include a proactive architect suggestion at the end of your reply.",
+  ].join("\n");
 
-  const updatedFiles = (result.updatedFiles || [])
-    .map((u: { file_path: string; content: string }) => {
-      const original = input.files.find((f) => f.file_path === u.file_path);
-      if (!original) return null;
-      return { id: original.id, file_path: u.file_path, content: u.content };
-    })
-    .filter(Boolean);
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userMessage },
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.15,
+      max_tokens: 8000,
+    });
 
-  return { reply: result.reply || "Done.", updatedFiles };
+    const content = response.choices[0]?.message?.content || "{}";
+    let parsed: {
+      reply?: string;
+      updatedFiles?: Array<{ file_path: string; content: string }>;
+      newFiles?: Array<{ file_path: string; content: string; language?: string }>;
+    };
+
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      return {
+        reply: "JSON formatting error encountered during generation. Please try re-issuing the instruction.",
+        updatedFiles: [],
+        newFiles: [],
+      };
+    }
+
+    const updatedFiles: UpdatedFile[] = [];
+    if (Array.isArray(parsed.updatedFiles)) {
+      for (const item of parsed.updatedFiles) {
+        if (!item.file_path || !item.content || item.content.trim().length < 10) continue;
+        const original = input.files.find(
+          (f) => f.file_path.toLowerCase() === item.file_path.toLowerCase()
+        );
+        if (original) {
+          updatedFiles.push({
+            id: original.id,
+            file_path: original.file_path,
+            content: item.content,
+          });
+        }
+      }
+    }
+
+    const newFiles: NewFile[] = [];
+    if (Array.isArray(parsed.newFiles)) {
+      for (const item of parsed.newFiles) {
+        if (!item.file_path || !item.content || item.content.trim().length < 10) continue;
+        const alreadyExists = input.files.find(
+          (f) => f.file_path.toLowerCase() === item.file_path.toLowerCase()
+        );
+        if (alreadyExists) {
+          updatedFiles.push({
+            id: alreadyExists.id,
+            file_path: alreadyExists.file_path,
+            content: item.content,
+          });
+        } else {
+          newFiles.push({
+            file_path: item.file_path,
+            content: item.content,
+            language: item.language || (item.file_path.endsWith(".json") ? "json" : "typescript"),
+          });
+        }
+      }
+    }
+
+    return {
+      reply:
+        parsed.reply ||
+        "Done. Elite Lovable design upgrades and vector graphics applied successfully.\n\n💡 PROACTIVE ARCHITECT SUGGESTION: Check your preview and ask me to create custom sub-components or interactive sections anytime!",
+      updatedFiles,
+      newFiles,
+    };
+  } catch (error: any) {
+    console.error("Real AI edit error:", error);
+    return {
+      reply: `Error: ${error.message || "OpenAI API request failed. Please check your API key configuration."}`,
+      updatedFiles: [],
+      newFiles: [],
+    };
+  }
 }

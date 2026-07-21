@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 
-const USE_MOCK = true; // ← Change to false when OpenAI funds arrive
+const USE_MOCK = false; // ← Change to false when OpenAI funds arrive
 
 export async function POST(request: Request) {
   try {

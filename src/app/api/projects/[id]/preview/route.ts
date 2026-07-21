@@ -32,7 +32,7 @@ export async function GET(
       currentUser.role === "ADMIN" ||
       (founderEmail !== "" && currentEmail === founderEmail);
 
-    // Load project with planning data AND generated files
+    // CRITICAL: Load project WITH files AND planning data
     const project = await prisma.project.findFirst({
       where: canAccessAnyProject
         ? { id: projectId }
@@ -41,8 +41,7 @@ export async function GET(
         routes: { orderBy: { sort_order: "asc" } },
         features: true,
         databaseTables: true,
-        // Load generated files for Preview V2
-        files: { orderBy: { file_path: "asc" } },
+        files: { orderBy: { file_path: "asc" } }, // ← ALL generated files
       },
     });
 
@@ -50,35 +49,36 @@ export async function GET(
       return new Response("Project not found", { status: 404 });
     }
 
-    // Read the target route from the query string
     const { searchParams } = new URL(request.url);
     const currentPath = searchParams.get("path") || "/";
 
-    // Generate the preview HTML
-    // If generated files exist → Preview V2 (renders actual code)
-    // If no generated files yet → Preview V1 (planning-based)
+    // Log for debugging
+    console.log("Preview requested for path:", currentPath);
+    console.log("Files in project:", project.files.map((f) => f.file_path));
+    console.log("Files count:", project.files.length);
+
     const html = generatePreviewHTML(
       {
         appName: project.app_name || "My App",
-        appDescription:
-          project.app_description || "An amazing application.",
+        appDescription: project.app_description || "An amazing application.",
         routes: project.routes,
         features: project.features,
         databaseTables: project.databaseTables,
       },
       currentPath,
-      project.files // ← NEW: Pass generated files to the preview generator
+      project.files // ← Pass actual files to the generator
     );
 
     return new Response(html, {
       status: 200,
       headers: {
         "Content-Type": "text/html; charset=utf-8",
-        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
       },
     });
   } catch (error) {
-    console.error("Preview V2 error:", error);
+    console.error("Preview error:", error);
     return new Response("Preview generation failed", { status: 500 });
   }
 }

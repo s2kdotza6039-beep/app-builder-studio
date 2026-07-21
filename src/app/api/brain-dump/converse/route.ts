@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 
-const USE_MOCK = true;
+const USE_MOCK = false;
 
 const SHANG_QUESTIONS = [
   "What problem does this app solve — and who specifically has that problem?",

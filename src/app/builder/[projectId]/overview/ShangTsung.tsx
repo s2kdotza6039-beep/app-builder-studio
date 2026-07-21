@@ -15,13 +15,17 @@ interface SuggestionChip {
 
 const PLANNING_CHIPS: SuggestionChip[] = [
   { icon: "💡", label: "What is missing?", message: "What is missing from this app? What should I add?" },
-  { icon: "🔐", label: "Add authentication", message: "Add a user authentication feature" },
-  { icon: "📋", label: "Suggest improvements", message: "Suggest improvements for this app" },
-  { icon: "💰", label: "Add payments", message: "Add a payment feature" },
+  { icon: "🤖", label: "Add AI feature", message: "Add an AI assistant feature to help users" },
+  { icon: "💳", label: "Add payments", message: "Add a payment feature" },
   { icon: "📊", label: "Add analytics", message: "Add an analytics dashboard feature" },
   { icon: "🔔", label: "Add notifications", message: "Add a notifications system" },
-  { icon: "📱", label: "Add mobile routes", message: "Add mobile-friendly routes" },
+  { icon: "🔐", label: "Add authentication", message: "Add a user authentication feature" },
+  { icon: "📱", label: "Mobile friendly", message: "Add mobile-friendly routes and features" },
   { icon: "🗄️", label: "Review database", message: "Review the database structure and suggest improvements" },
+  { icon: "📋", label: "Suggest improvements", message: "Suggest improvements for this app" },
+  { icon: "🌍", label: "Add localization", message: "Add multi-language or regional support features" },
+  { icon: "📦", label: "Add inventory", message: "Add inventory management features" },
+  { icon: "⭐", label: "Add reviews", message: "Add a reviews and ratings system" },
 ];
 
 export default function ShangTsung({
@@ -44,14 +48,19 @@ export default function ShangTsung({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const visibleChips = showAllChips ? PLANNING_CHIPS : PLANNING_CHIPS.slice(0, 4);
+  const visibleChips = showAllChips
+    ? PLANNING_CHIPS
+    : PLANNING_CHIPS.slice(0, 4);
 
   const handleSend = async (messageText?: string) => {
     const textToSend = messageText || input.trim();
     if (!textToSend || loading) return;
 
     setInput("");
-    setMessages((prev) => [...prev, { role: "user", message: textToSend }]);
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", message: textToSend },
+    ]);
     setLoading(true);
 
     try {
@@ -74,7 +83,8 @@ export default function ShangTsung({
             ...prev,
             {
               role: "assistant",
-              message: "✅ Done. Scroll up to see the update, or refresh the page to see the full changes.",
+              message:
+                "✅ Done. Scroll up to see the update, or refresh the page to see the full changes.",
             },
           ]);
           setTimeout(() => window.location.reload(), 1500);
@@ -83,7 +93,10 @@ export default function ShangTsung({
     } catch {
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", message: "Something went wrong. Please try again." },
+        {
+          role: "assistant",
+          message: "Something went wrong. Please try again.",
+        },
       ]);
     } finally {
       setLoading(false);
@@ -99,18 +112,21 @@ export default function ShangTsung({
 
   return (
     <div className="flex flex-col h-full">
+
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.map((msg, i) => (
           <div
             key={i}
-            className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+            className={`flex ${
+              msg.role === "user" ? "justify-end" : "justify-start"
+            }`}
           >
             <div
               className={`max-w-[90%] rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap leading-relaxed ${
                 msg.role === "user"
-                  ? "bg-orange-600 text-white rounded-br-none"
-                  : "bg-slate-800 text-slate-200 rounded-bl-none"
+                  ? "bg-orange-700 text-white rounded-br-none"
+                  : "bg-stone-800 text-stone-200 rounded-bl-none"
               }`}
             >
               {msg.role === "assistant" && (
@@ -125,7 +141,7 @@ export default function ShangTsung({
 
         {loading && (
           <div className="flex justify-start">
-            <div className="bg-slate-800 text-slate-400 rounded-2xl rounded-bl-none px-4 py-3 text-sm italic">
+            <div className="bg-stone-800 text-stone-400 rounded-2xl rounded-bl-none px-4 py-3 text-sm italic">
               Shang Tsung is thinking...
             </div>
           </div>
@@ -137,12 +153,12 @@ export default function ShangTsung({
       {/* Suggestion Chips */}
       <div className="px-4 pb-2">
         <div className="flex items-center justify-between mb-2">
-          <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider">
+          <p className="text-xs text-stone-500 font-semibold uppercase tracking-wider">
             Quick Commands
           </p>
           <button
             onClick={() => setShowAllChips(!showAllChips)}
-            className="text-xs text-slate-500 hover:text-slate-300 transition"
+            className="text-xs text-stone-500 hover:text-stone-300 transition"
           >
             {showAllChips ? "Show less" : "Show more"}
           </button>
@@ -154,7 +170,7 @@ export default function ShangTsung({
               key={i}
               onClick={() => handleSend(chip.message)}
               disabled={loading}
-              className="flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900 hover:border-orange-600 hover:bg-slate-800 disabled:opacity-50 px-3 py-1.5 text-xs font-medium text-slate-300 hover:text-white transition-all"
+              className="flex items-center gap-1.5 rounded-xl border border-stone-700 bg-stone-900 hover:border-orange-600 hover:bg-stone-800 disabled:opacity-50 px-3 py-1.5 text-xs font-medium text-stone-300 hover:text-white transition-all"
             >
               <span>{chip.icon}</span>
               <span>{chip.label}</span>
@@ -164,7 +180,7 @@ export default function ShangTsung({
       </div>
 
       {/* Input Area */}
-      <div className="border-t border-slate-800 p-4 bg-slate-900">
+      <div className="border-t border-stone-800 p-4 bg-stone-900">
         <div className="flex gap-2">
           <textarea
             value={input}
@@ -172,17 +188,17 @@ export default function ShangTsung({
             onKeyDown={handleKeyDown}
             placeholder="Tell Shang Tsung what to build..."
             rows={3}
-            className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-orange-500 resize-none"
+            className="flex-1 bg-stone-950 border border-stone-700 rounded-xl px-3 py-2 text-sm text-white placeholder-stone-500 focus:outline-none focus:border-orange-500 resize-none"
           />
           <button
             onClick={() => handleSend()}
             disabled={loading || !input.trim()}
-            className="rounded-xl bg-orange-600 px-4 py-2 text-sm font-semibold hover:bg-orange-500 disabled:opacity-40 transition self-end"
+            className="rounded-xl bg-orange-700 px-4 py-2 text-sm font-semibold hover:bg-orange-600 disabled:opacity-40 transition self-end text-white"
           >
             Send
           </button>
         </div>
-        <p className="mt-2 text-xs text-slate-500">
+        <p className="mt-2 text-xs text-stone-500">
           Enter to send · Shift+Enter for new line
         </p>
       </div>

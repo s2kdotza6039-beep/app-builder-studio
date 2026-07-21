@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 
-const USE_MOCK = true; // ← Change to false when OpenAI funds are loaded
+const USE_MOCK = false; // ← Change to false when OpenAI funds are loaded
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || "not-needed-in-mock-mode",
