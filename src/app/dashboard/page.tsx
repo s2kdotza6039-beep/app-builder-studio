@@ -48,7 +48,14 @@ export default function DashboardPage() {
         throw new Error("Unable to load projects workspace");
       }
       const data = await res.json();
-      setProjects(Array.isArray(data.projects) ? data.projects : []);
+      const rawList = Array.isArray(data?.projects)
+        ? data.projects
+        : Array.isArray(data?.data)
+        ? data.data
+        : Array.isArray(data)
+        ? data
+        : [];
+      setProjects(rawList);
     } catch (err: any) {
       setError(err.message || "Failed to fetch projects");
     } finally {
@@ -76,7 +83,6 @@ export default function DashboardPage() {
     }
   }
 
-  // Filter logic: match category tab AND search query
   const filteredProjects = useMemo(() => {
     return projects.filter((p) => {
       const matchesTab =
@@ -126,14 +132,15 @@ export default function DashboardPage() {
     }
   }
 
+  // Notice: min-h-screen w-full flex flex-col flex-1 ensures 100% full screen coverage!
   return (
-    <div className="min-h-screen bg-[#09090b] text-zinc-100 selection:bg-orange-500 selection:text-white">
+    <div className="min-h-screen w-full bg-[#09090b] text-zinc-100 selection:bg-orange-500 selection:text-white flex flex-col flex-1">
       {/* Ambient Radial Spectrum Glow */}
       <div className="fixed top-0 left-1/2 -translate-x-1/2 w-[800px] h-[350px] bg-gradient-to-tr from-orange-600/10 via-indigo-600/10 to-transparent blur-[140px] pointer-events-none -z-10" />
 
       {/* Header Bar */}
-      <header className="sticky top-0 z-40 border-b border-white/10 bg-[#09090b]/80 backdrop-blur-md px-6 py-4">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+      <header className="sticky top-0 z-40 border-b border-white/10 bg-[#09090b]/80 backdrop-blur-md px-6 py-4 shrink-0 w-full">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
           <Link href="/" className="text-xl font-black text-white flex items-center gap-2.5 tracking-tight">
             <span className="w-8 h-8 rounded-xl bg-gradient-to-br from-orange-500 to-amber-600 flex items-center justify-center text-white text-sm shadow-lg shadow-orange-500/20">
               ⚡
@@ -152,16 +159,16 @@ export default function DashboardPage() {
       </header>
 
       {/* Main Container */}
-      <main className="max-w-6xl mx-auto px-6 py-12">
+      <main className="max-w-7xl mx-auto px-6 py-12 flex-1 w-full flex flex-col">
         {/* Title & Stats */}
-        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-6 mb-10">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-6 mb-10 shrink-0">
           <div>
             <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 backdrop-blur-md px-3 py-1 text-xs font-semibold text-orange-400 mb-3 shadow-inner">
               Workspace Dashboard
             </div>
             <h1 className="text-4xl sm:text-5xl font-black tracking-tight text-white">Your Applications</h1>
             <p className="text-zinc-400 text-sm mt-2">
-              Manage, filter, and enter The Forge to generate and edit code with Shang Tsung.
+              Manage, filter, and enter The Forge to generate and edit code with Lovable-grade quality.
             </p>
           </div>
           <div className="flex items-center gap-3 bg-white/[0.03] border border-white/10 px-5 py-3 rounded-2xl">
@@ -173,7 +180,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Filter Bar & Search Input */}
-        <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 mb-8 bg-white/[0.02] border border-white/10 p-2 rounded-2xl backdrop-blur-md">
+        <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 mb-8 bg-white/[0.02] border border-white/10 p-2 rounded-2xl backdrop-blur-md shrink-0">
           {/* Category Pills */}
           <div className="flex items-center gap-1 overflow-x-auto p-1">
             {categories.map((cat) => (
@@ -221,14 +228,14 @@ export default function DashboardPage() {
 
         {/* Loading / Error States */}
         {loading && (
-          <div className="border border-white/10 bg-white/[0.02] rounded-3xl p-16 text-center">
+          <div className="border border-white/10 bg-white/[0.02] rounded-3xl p-16 text-center flex-1 flex flex-col items-center justify-center">
             <div className="w-10 h-10 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
             <p className="text-zinc-400 font-medium text-sm">Loading your Lovable-grade workspace...</p>
           </div>
         )}
 
         {error && !loading && (
-          <div className="border border-red-500/30 bg-red-500/10 rounded-3xl p-8 text-center text-red-300">
+          <div className="border border-red-500/30 bg-red-500/10 rounded-3xl p-8 text-center text-red-300 flex-1 flex flex-col items-center justify-center">
             <p className="font-bold mb-2">Error Loading Projects</p>
             <p className="text-sm mb-4">{error}</p>
             <button
@@ -242,7 +249,7 @@ export default function DashboardPage() {
 
         {/* Empty State */}
         {!loading && !error && filteredProjects.length === 0 && (
-          <div className="border border-white/10 bg-white/[0.02] rounded-3xl p-16 text-center backdrop-blur-md">
+          <div className="border border-white/10 bg-white/[0.02] rounded-3xl p-16 text-center backdrop-blur-md flex-1 flex flex-col items-center justify-center">
             <div className="w-16 h-16 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-3xl mx-auto mb-6">
               📂
             </div>
@@ -275,7 +282,7 @@ export default function DashboardPage() {
 
         {/* Projects Grid */}
         {!loading && !error && filteredProjects.length > 0 && (
-          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 pb-12">
             {filteredProjects.map((p) => (
               <div
                 key={p.id}

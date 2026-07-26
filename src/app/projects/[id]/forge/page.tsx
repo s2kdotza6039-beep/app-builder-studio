@@ -1,805 +1,539 @@
 "use client";
 
-import React, { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useParams } from "next/navigation";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { ToastProvider, useToast } from "@/components/ui/Toast";
+import { CodeViewer, ViewerFile } from "@/components/forge/CodeViewer";
 
-interface GeneratedFile {
-  id?: string;
-  file_path: string;
-  content: string;
-  language: string;
-}
-
-interface VersionItem {
+/* ----------------------------- types ----------------------------- */
+interface Message {
   id: string;
-  version_number: number;
-  label: string | null;
-  instruction: string | null;
-  created_at: string;
-}
-
-interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
+  role: string;
   message: string;
   created_at: string;
+  metadata?: any;
+}
+interface QuickCmd {
+  label?: string;
+  text?: string;
+  command?: string;
 }
 
-interface Project {
-  id: string;
-  app_name: string;
-  app_description: string | null;
-  status: string;
-  files: GeneratedFile[];
-  versions?: VersionItem[];
-  aiMessages?: ChatMessage[];
+/* --------------------------- helpers ----------------------------- */
+function viewportStyle(mode: string): React.CSSProperties {
+  if (mode === "tablet")
+    return { width: 820, height: "100%", margin: "0 auto" };
+  if (mode === "mobile")
+    return { width: 390, height: "100%", margin: "0 auto" };
+  return { width: "100%", height: "100%" }; // autofit + desktop
 }
 
-export default function ForgeStudioPage() {
-  const params = useParams();
-  const router = useRouter();
-  const projectId = typeof params?.id === "string" ? params.id : "";
-
-  const [project, setProject] = useState<Project | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-
-  // Studio UI Control State (Collapsible & Fullscreen)
-  const [activeTab, setActiveTab] = useState<"FILES" | "VERSIONS">("FILES");
-  const [selectedFile, setSelectedFile] = useState<GeneratedFile | null>(null);
-  const [viewport, setViewport] = useState<"DESKTOP" | "TABLET" | "MOBILE">("DESKTOP");
-  const [previewPath, setPreviewPath] = useState<string>("/");
-  const [previewKey, setPreviewKey] = useState<number>(Date.now());
-
-  // Collapsible Panels & Draggable Splitter Widths
-  const [leftOpen, setLeftOpen] = useState<boolean>(true);
-  const [rightOpen, setRightOpen] = useState<boolean>(true);
-  const [fullscreenPreview, setFullscreenPreview] = useState<boolean>(false);
-
-  const [leftWidth, setLeftWidth] = useState<number>(300);
-  const [rightWidth, setRightWidth] = useState<number>(380);
-  const [isResizingLeft, setIsResizingLeft] = useState<boolean>(false);
-  const [isResizingRight, setIsResizingRight] = useState<boolean>(false);
-
-  // Dynamic Project-Tailored Quick Commands State
-  const [quickCommands, setQuickCommands] = useState<string[]>([]);
-  const [shufflingSuggestions, setShufflingSuggestions] = useState<boolean>(false);
-  const [showSuggestionsDrawer, setShowSuggestionsDrawer] = useState<boolean>(true);
-
-  // Shang Tsung Chat State
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [inputMessage, setInputMessage] = useState<string>("");
-  const [chatting, setChatting] = useState<boolean>(false);
-  const [generatingCode, setGeneratingCode] = useState<boolean>(false);
-  const [restoring, setRestoring] = useState<string | null>(null);
-
-  // External Action States (GitHub & Vercel)
-  const [pushingGithub, setPushingGithub] = useState<boolean>(false);
-  const [deployingVercel, setDeployingVercel] = useState<boolean>(false);
-
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (projectId) {
-      fetchForgeData();
-      fetchQuickCommands();
+// Robust clipboard copy: uses the async Clipboard API when available,
+// and falls back to a hidden textarea + execCommand for non-secure
+// contexts (e.g. accessed over a LAN IP instead of localhost).
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
     }
-  }, [projectId]);
+  } catch {
+    /* fall through to legacy method */
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
 
-  useEffect(() => {
-    if (!fullscreenPreview && rightOpen) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [messages, chatting, fullscreenPreview, rightOpen]);
+// Turn ANY suggestions response into clean { label, text } chips.
+// Also splits one long "blob" of commands into individual chips.
+function normQuick(qs: any): QuickCmd[] {
+  let arr: any[] = [];
+  if (Array.isArray(qs)) arr = qs;
+  else if (Array.isArray(qs?.suggestions)) arr = qs.suggestions;
+  else if (Array.isArray(qs?.commands)) arr = qs.commands;
+  else if (Array.isArray(qs?.prompts)) arr = qs.prompts;
+  else if (Array.isArray(qs?.quickCommands)) arr = qs.quickCommands;
+  else if (Array.isArray(qs?.data)) arr = qs.data;
 
-  // Mouse Drag Handlers for Draggable Column Splitters
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (isResizingLeft) {
-        const newW = Math.max(200, Math.min(650, e.clientX));
-        setLeftWidth(newW);
-      }
-      if (isResizingRight) {
-        const newW = Math.max(280, Math.min(750, window.innerWidth - e.clientX));
-        setRightWidth(newW);
-      }
-    };
-
-    const handleMouseUp = () => {
-      setIsResizingLeft(false);
-      setIsResizingRight(false);
-    };
-
-    if (isResizingLeft || isResizingRight) {
-      window.addEventListener("mousemove", handleMouseMove);
-      window.addEventListener("mouseup", handleMouseUp);
-    }
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [isResizingLeft, isResizingRight]);
-
-  async function fetchForgeData() {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/projects/${projectId}`);
-      if (!res.ok) {
-        if (res.status === 401) {
-          router.push("/auth");
-          return;
+  const out: QuickCmd[] = [];
+  for (const c of arr) {
+    if (typeof c === "string") {
+      // Split a blob like "Do A. Do B. Do C" into separate commands.
+      const parts = c
+        .split(/\.(?=\s*[A-Z(])/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 12);
+      if (parts.length > 1) {
+        for (const p of parts) {
+          const clean = p.endsWith(".") ? p : p + ".";
+          out.push({
+            label: clean.length > 64 ? clean.slice(0, 61) + "…" : clean,
+            text: clean,
+          });
         }
-        throw new Error("Unable to load project inside The Forge");
-      }
-      const data = await res.json();
-      const proj = data.project;
-      if (!proj) throw new Error("Project not found");
-
-      setProject(proj);
-      if (proj.files && proj.files.length > 0) {
-        const homeFile = proj.files.find((f: GeneratedFile) => f.file_path.toLowerCase() === "app/page.tsx");
-        setSelectedFile(homeFile || proj.files[0]);
-      }
-      if (proj.aiMessages) {
-        setMessages(proj.aiMessages);
-      }
-    } catch (err: any) {
-      setError(err.message || "Failed to fetch Forge workspace");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function fetchQuickCommands() {
-    setShufflingSuggestions(true);
-    try {
-      const res = await fetch(`/api/projects/${projectId}/suggestions`);
-      const data = await res.json();
-      if (res.ok && Array.isArray(data.suggestions) && data.suggestions.length > 0) {
-        setQuickCommands(data.suggestions);
       } else {
-        setQuickCommands([
-          "Create a custom vector SVG logo component inside components/Logo.tsx with a warm dining theme and embed it in Navigation.tsx",
-          "Modify app/page.tsx to add a high-converting 3-tier SaaS pricing calculator with animated toggle switches",
-          "Create a modern analytics metrics section inside app/dashboard/page.tsx with statistical growth charts",
-          "Add glowing glassmorphic customer review cards on app/reviews/page.tsx with 5-star badges",
-        ]);
+        out.push({
+          label: c.length > 64 ? c.slice(0, 61) + "…" : c,
+          text: c,
+        });
       }
-    } catch {
-      setQuickCommands([
-        "Create a custom vector SVG logo component inside components/Logo.tsx with a warm dining theme and embed it in Navigation.tsx",
-        "Modify app/page.tsx to add a high-converting 3-tier SaaS pricing calculator with animated toggle switches",
-        "Create a modern analytics metrics section inside app/dashboard/page.tsx with statistical growth charts",
-        "Add glowing glassmorphic customer review cards on app/reviews/page.tsx with 5-star badges",
-      ]);
-    } finally {
-      setShufflingSuggestions(false);
+    } else {
+      const label =
+        c?.label ?? c?.text ?? c?.command ?? c?.prompt ?? c?.title ?? c?.name ?? "Command";
+      const text = c?.text ?? c?.command ?? c?.prompt ?? c?.label ?? c?.title ?? "";
+      out.push({ label, text });
     }
   }
+  return out;
+}
 
-  async function handleSendMessage(e?: React.FormEvent, presetCmd?: string) {
-    if (e) e.preventDefault();
-    const textToSend = presetCmd || inputMessage;
-    if (!textToSend.trim() || chatting || !project) return;
+function MessageBubble({
+  m,
+  rating,
+  onRate,
+}: {
+  m: Message;
+  rating?: string;
+  onRate: (r: "red" | "orange" | "green") => void;
+}) {
+  const isUser = m.role === "user";
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    const ok = await copyToClipboard(m.message);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
+  };
+  return (
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+      <div
+        className={`group relative max-w-[82%] rounded-2xl px-4 py-2 text-sm shadow ${
+          isUser
+            ? "bg-violet-600 text-white"
+            : "border border-slate-700 bg-slate-800 text-slate-100"
+        }`}
+      >
+        <button
+          onClick={copy}
+          title="Copy message"
+          className="absolute right-2 top-2 cursor-pointer rounded-md border border-white/20 bg-black/50 px-2 py-0.5 text-[10px] text-white/90 hover:bg-black/70"
+        >
+          {copied ? "Copied!" : "⧉ Copy"}
+        </button>
+        {rating && (
+          <span
+            title={`Rated: ${rating}`}
+            className={`absolute left-2 bottom-2 h-2 w-2 rounded-full ${
+              rating === "red" ? "bg-red-500" : rating === "orange" ? "bg-orange-500" : "bg-green-500"
+            }`}
+          />
+        )}
+        <div className="absolute right-2 bottom-2 flex gap-1 opacity-0 transition group-hover:opacity-100">
+          <button
+            onClick={(e) => { e.stopPropagation(); onRate("red"); }}
+            title="Don't like (Red)"
+            className={`h-3 w-3 rounded-full bg-red-500 ${rating === "red" ? "ring-2 ring-white" : ""}`}
+          />
+          <button
+            onClick={(e) => { e.stopPropagation(); onRate("orange"); }}
+            title="Partial (Orange)"
+            className={`h-3 w-3 rounded-full bg-orange-500 ${rating === "orange" ? "ring-2 ring-white" : ""}`}
+          />
+          <button
+            onClick={(e) => { e.stopPropagation(); onRate("green"); }}
+            title="Love it (Green)"
+            className={`h-3 w-3 rounded-full bg-green-500 ${rating === "green" ? "ring-2 ring-white" : ""}`}
+          />
+        </div>
+        <div className="mb-1 pr-6 text-[10px] uppercase tracking-wider opacity-60">
+          {isUser ? "You" : "Shang Tsung"}
+        </div>
+        <div className="whitespace-pre-wrap pr-6 pb-1">{m.message}</div>
+      </div>
+    </div>
+  );
+}
 
-    if (fullscreenPreview) setFullscreenPreview(false);
-    if (!rightOpen) setRightOpen(true);
+function ThinkingBubble() {
+  return (
+    <div className="flex justify-start">
+      <div className="rounded-2xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm text-slate-300">
+        <span className="inline-flex gap-1">
+          <span className="animate-bounce">●</span>
+          <span className="animate-bounce [animation-delay:0.15s]">●</span>
+          <span className="animate-bounce [animation-delay:0.3s]">●</span>
+        </span>
+        <span className="ml-2">Shang Tsung is working…</span>
+      </div>
+    </div>
+  );
+}
 
-    const userMsg: ChatMessage = {
-      id: `local-${Date.now()}`,
+/* --------------------------- forge ------------------------------ */
+function ForgeInner() {
+  const params = useParams();
+  const id = String(params.id);
+  const { show } = useToast();
+
+  const [projectName, setProjectName] = useState("Project");
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState("");
+  const [thinking, setThinking] = useState(false);
+  const [view, setView] = useState<"chat" | "code">("chat");
+  const [files, setFiles] = useState<ViewerFile[]>([]);
+  const [quick, setQuick] = useState<QuickCmd[]>([]);
+  const [previewKey, setPreviewKey] = useState(0);
+  const [viewport, setViewport] = useState<
+    "autofit" | "desktop" | "tablet" | "mobile"
+  >("autofit");
+  const [previewWidth, setPreviewWidth] = useState(60); // percent
+  const [dragging, setDragging] = useState(false);
+
+  const chatEnd = useRef<HTMLDivElement>(null);
+
+  const loadAll = useCallback(async () => {
+    try {
+      const [p, m, f, q] = await Promise.all([
+        fetch(`/api/projects/${id}`),
+        fetch(`/api/projects/${id}/messages`),
+        fetch(`/api/projects/${id}/files`),
+        fetch(`/api/projects/${id}/suggestions`),
+      ]);
+      const pj = await p.json();
+      setProjectName(pj?.name ?? pj?.project?.name ?? "Project");
+      const msgs = await m.json();
+      setMessages(Array.isArray(msgs) ? msgs : msgs?.messages ?? []);
+      const fls = await f.json();
+      setFiles(Array.isArray(fls) ? fls : fls?.files ?? []);
+      const qs = await q.json();
+      setQuick(normQuick(qs));
+    } catch (e) {
+      console.error("loadAll error", e);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    loadAll();
+  }, [loadAll]);
+
+  useEffect(() => {
+    chatEnd.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, thinking]);
+
+  /* draggable splitter */
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!dragging) return;
+      const pct = (e.clientX / window.innerWidth) * 100;
+      setPreviewWidth(Math.min(85, Math.max(30, pct)));
+    };
+    const onUp = () => setDragging(false);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [dragging]);
+
+  const send = async (text: string) => {
+    const t = text.trim();
+    if (!t || thinking) return;
+    setThinking(true);
+    setInput("");
+
+    const uid = `tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const tempUser: Message = {
+      id: uid + "-u",
       role: "user",
-      message: textToSend.trim(),
+      message: t,
       created_at: new Date().toISOString(),
     };
-
-    setMessages((prev) => [...prev, userMsg]);
-    setInputMessage("");
-    setChatting(true);
+    setMessages((prev) => [...prev, tempUser]);
 
     try {
-      const res = await fetch(`/api/projects/${project.id}/forge-chat`, {
+      const res = await fetch(`/api/projects/${id}/forge-chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: textToSend.trim() }),
+        body: JSON.stringify({ message: t }),
       });
       const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Shang Tsung encountered an error while editing code");
+      if (data?.reply) {
+        const ai: Message = {
+          id: uid + "-a",
+          role: "assistant",
+          message: data.reply,
+          created_at: new Date().toISOString(),
+          metadata: data,
+        };
+        setMessages((prev) => [
+          ...prev.filter((x) => x.id !== uid + "-u"),
+          tempUser,
+          ai,
+        ]);
+        if (data.filesChanged > 0) {
+          show(
+            `✅ Edited ${data.updated} · Created ${data.created} · Deleted ${data.deleted}`,
+            "success"
+          );
+          setPreviewKey((k) => k + 1);
+        } else {
+          show("⚠️ No files changed — try rephrasing.", "info");
+        }
+        loadAll();
+      } else {
+        show("❌ Command failed — check the terminal.", "error");
       }
-
-      const assistantMsg: ChatMessage = {
-        id: `local-${Date.now() + 1}`,
-        role: "assistant",
-        message: data.reply || "Done. Your changes have been applied in The Forge.",
-        created_at: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, assistantMsg]);
-
-      if (data.filesChanged > 0 || (data.updatedFiles && data.updatedFiles.length > 0) || (data.newFiles && data.newFiles.length > 0)) {
-        await fetchForgeData();
-        setPreviewKey(Date.now());
-      }
-    } catch (err: any) {
-      const errorMsg: ChatMessage = {
-        id: `local-err-${Date.now()}`,
-        role: "assistant",
-        message: `⚠️ Dojo Error: ${err.message}`,
-        created_at: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, errorMsg]);
+    } catch {
+      show("❌ Network error — check the terminal.", "error");
     } finally {
-      setChatting(false);
+      setThinking(false);
     }
-  }
+  };
 
-  async function handleRegenerateCode() {
-    if (generatingCode || !project) return;
-    if (!confirm("Are you sure you want to regenerate all code files? This will overwrite manual edits.")) return;
-
-    setGeneratingCode(true);
+  const runAction = async (url: string, label: string) => {
+    show(`${label} starting…`, "info");
     try {
-      const res = await fetch(`/api/projects/${project.id}/forge-api`, {
-        method: "POST",
+      const r = await fetch(url, { method: "POST" });
+      if (r.ok) show(`✅ ${label} done`, "success");
+      else show(`❌ ${label} failed`, "error");
+    } catch {
+      show(`❌ ${label} error`, "error");
+    }
+  };
+
+  const rateMessage = async (mid: string, rating: "red" | "orange" | "green") => {
+    try {
+      await fetch(`/api/projects/${id}/messages/${mid}`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ rating }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Regeneration failed");
-
-      await fetchForgeData();
-      setPreviewKey(Date.now());
-    } catch (err: any) {
-      alert(`Regeneration error: ${err.message}`);
-    } finally {
-      setGeneratingCode(false);
+      setMessages((prev) =>
+        prev.map((x) =>
+          x.id === mid ? { ...x, metadata: { ...(x.metadata || {}), rating } } : x
+        )
+      );
+    } catch {
+      /* ignore */
     }
-  }
+  };
 
-  async function handleRestoreVersion(versionId: string, versionLabel: string | null) {
-    if (restoring || !project) return;
-    if (!confirm(`Restore project to "${versionLabel || versionId}"? Current edits will be auto-saved as a backup.`)) return;
+  const shuffle = () => setQuick((q) => [...q].sort(() => Math.random() - 0.5));
+  const visible = messages.slice(-10);
+  const previewSrc = `/api/projects/${id}/preview?path=%2F&k=${previewKey}`;
 
-    setRestoring(versionId);
-    try {
-      const res = await fetch(`/api/projects/${project.id}/versions/${versionId}/restore`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Restore failed");
-
-      await fetchForgeData();
-      setPreviewKey(Date.now());
-      alert(`✅ Restored to version successfully!`);
-    } catch (err: any) {
-      alert(`Restore error: ${err.message}`);
-    } finally {
-      setRestoring(null);
-    }
-  }
-
-  async function handlePushGithub() {
-    if (pushingGithub || !project) return;
-    setPushingGithub(true);
-    try {
-      const res = await fetch(`/api/projects/${project.id}/github/push`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "GitHub push failed");
-      alert(`✅ Successfully pushed "${project.app_name}" to your connected GitHub repository!`);
-    } catch (err: any) {
-      alert(`🐙 GitHub Push Info: ${err.message || "Ensure your GitHub token is connected in Settings."}`);
-    } finally {
-      setPushingGithub(false);
-    }
-  }
-
-  async function handleDeployVercel() {
-    if (deployingVercel || !project) return;
-    setDeployingVercel(true);
-    try {
-      const res = await fetch(`/api/projects/${project.id}/vercel/deploy`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Vercel deployment failed");
-      alert(`🚀 Successfully triggered Vercel live deployment for "${project.app_name}"! Check your Vercel dashboard.`);
-    } catch (err: any) {
-      alert(`🚀 Vercel Deploy Info: ${err.message || "Ensure your Vercel account token is linked in Settings."}`);
-    } finally {
-      setDeployingVercel(false);
-    }
-  }
-
-  function handleDownloadZip() {
-    if (!project || !project.files || project.files.length === 0) {
-      alert("No files generated yet to download.");
-      return;
-    }
-    window.open(`/api/projects/${project.id}/export/zip`, "_blank");
-  }
-
-  function getFileIcon(path: string) {
-    if (path.endsWith(".json")) return "📋";
-    if (path.endsWith(".md")) return "📝";
-    if (path.includes("layout")) return "🏛️";
-    if (path.includes("Navigation")) return "🧭";
-    if (path.includes("Logo")) return "🎨";
-    if (path.includes("page.tsx")) return "⚛️";
-    return "📄";
-  }
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-[#09090b] text-white flex flex-col items-center justify-center p-6">
-        <div className="w-12 h-12 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mb-4" />
-        <p className="text-zinc-400 font-medium text-sm">Entering The Forge (Lovable-Grade Workspace)...</p>
-      </div>
-    );
-  }
-
-  if (error || !project) {
-    return (
-      <div className="min-h-screen bg-[#09090b] text-white flex flex-col items-center justify-center p-6">
-        <div className="border border-red-500/30 bg-red-500/10 rounded-3xl p-8 max-w-md text-center">
-          <h2 className="text-xl font-black text-red-300 mb-2">Error Loading The Forge</h2>
-          <p className="text-zinc-400 text-xs mb-6">{error || "Project workspace unavailable."}</p>
-          <Link
-            href="/dashboard"
-            className="rounded-xl bg-white/10 hover:bg-white/20 px-6 py-3 text-xs font-bold text-white transition"
-          >
-            ← Return to Dashboard
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
-  const previewUrl = `/api/projects/${project.id}/preview?path=${encodeURIComponent(previewPath)}&k=${previewKey}`;
+  const tabCls = (active: boolean) =>
+    `rounded-md px-3 py-1 text-xs font-semibold ${
+      active ? "bg-violet-600 text-white" : "text-slate-400 hover:text-slate-200"
+    }`;
+  const vpCls = (active: boolean) =>
+    `rounded px-2 py-1 text-xs ${
+      active ? "bg-violet-600 text-white" : "text-slate-300 hover:bg-slate-800"
+    }`;
 
   return (
-    <div className="min-h-screen bg-[#09090b] text-zinc-100 flex flex-col overflow-hidden selection:bg-orange-500 selection:text-white">
-      {/* Top Studio Header Bar */}
-      <header className="h-16 border-b border-white/10 bg-[#09090b]/90 backdrop-blur-md px-4 sm:px-6 flex items-center justify-between shrink-0 z-50">
-        <div className="flex items-center gap-3">
-          <Link
-            href={`/projects/${project.id}/planning`}
-            className="text-xs text-zinc-400 hover:text-white transition flex items-center gap-1.5 font-medium whitespace-nowrap"
-            title="Return to Planning Stage Blueprint"
-          >
-            <span>←</span> <span className="hidden sm:inline">Planning Blueprint</span>
-          </Link>
-          <span className="text-zinc-700">|</span>
-          <div className="flex items-center gap-2">
-            <span className="w-6 h-6 rounded-lg bg-gradient-to-br from-orange-500 to-amber-600 flex items-center justify-center text-white text-xs shadow-md shadow-orange-500/20">
-              ⚡
-            </span>
-            <span className="font-black text-white text-sm tracking-tight truncate max-w-[140px] sm:max-w-xs">
-              {project.app_name}
-            </span>
-            <span className="hidden md:inline-flex items-center gap-1.5 rounded-full border border-orange-500/30 bg-orange-500/10 px-2.5 py-0.5 text-[10px] font-bold text-orange-400">
-              <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse" /> The Forge Live
-            </span>
-          </div>
+    <div className="flex h-screen flex-col overflow-hidden bg-slate-950 text-slate-100">
+      {/* ---------- HEADER ---------- */}
+      <header className="flex h-12 shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900 px-4">
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <span className="text-violet-400">◆</span> App Builder Studio
+          <span className="text-slate-600">/</span>
+          <span className="text-slate-300">{projectName}</span>
         </div>
-
-        {/* Action Header Buttons (Glowing GitHub, Vercel, Download, & Re-Generate) */}
-        <div className="flex items-center gap-2 sm:gap-2.5 overflow-x-auto py-1">
+        <div className="flex items-center gap-2">
           <button
-            onClick={handlePushGithub}
-            disabled={pushingGithub}
-            className="group relative rounded-xl border border-purple-500/30 bg-purple-500/10 hover:bg-purple-500/20 px-3.5 py-2 text-xs font-bold text-purple-300 hover:text-white transition flex items-center gap-1.5 shadow-lg hover:shadow-purple-500/30 disabled:opacity-50 whitespace-nowrap"
-            title="Push generated Next.js code directly to your GitHub repository"
+            onClick={() => runAction(`/api/projects/${id}/github/push`, "GitHub push")}
+            className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:border-violet-500 hover:text-violet-300"
           >
-            <span className="text-sm group-hover:scale-110 transition-transform">⬆</span>
-            <span>{pushingGithub ? "Pushing..." : "GitHub"}</span>
+            GitHub
           </button>
-
           <button
-            onClick={handleDeployVercel}
-            disabled={deployingVercel}
-            className="group relative rounded-xl border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 px-3.5 py-2 text-xs font-bold text-emerald-300 hover:text-white transition flex items-center gap-1.5 shadow-lg hover:shadow-emerald-500/30 disabled:opacity-50 whitespace-nowrap"
-            title="Trigger instant one-click Vercel live cloud deployment"
+            onClick={() => runAction(`/api/projects/${id}/vercel/deploy`, "Vercel deploy")}
+            className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:border-violet-500 hover:text-violet-300"
           >
-            <span className="text-sm group-hover:scale-110 transition-transform">🚀</span>
-            <span>{deployingVercel ? "Deploying..." : "Vercel Live"}</span>
+            Vercel
           </button>
-
-          <button
-            onClick={handleRegenerateCode}
-            disabled={generatingCode}
-            className="rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 px-3 py-2 text-xs font-bold text-zinc-300 hover:text-white transition flex items-center gap-1.5 disabled:opacity-50 whitespace-nowrap hidden sm:flex"
-            title="Regenerate all code files from the architecture blueprint"
+          <Link
+            href="/dashboard"
+            className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:border-violet-500 hover:text-violet-300"
           >
-            <span>🔄</span> {generatingCode ? "Rebuilding..." : "Re-Generate"}
-          </button>
-
-          <button
-            onClick={handleDownloadZip}
-            className="rounded-xl bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 px-4 py-2 text-xs font-bold text-white shadow-lg shadow-orange-600/20 hover:-translate-y-0.5 transition flex items-center gap-1.5 whitespace-nowrap"
-            title="Download complete project code as ZIP archive"
-          >
-            <span>📦</span> Download ZIP
-          </button>
+            ← Projects
+          </Link>
         </div>
       </header>
 
-      {/* Workspace Control Bar (Collapsible Panel & Fullscreen Viewport Toggles) */}
-      <div className="h-9 bg-black/60 border-b border-white/10 px-4 flex items-center justify-between text-xs font-bold text-zinc-400 shrink-0 select-none">
-        <div className="flex items-center gap-2">
-          {!fullscreenPreview && (
-            <button
-              onClick={() => setLeftOpen(!leftOpen)}
-              className="hover:text-white transition flex items-center gap-1 bg-white/5 border border-white/5 px-2.5 py-1 rounded-lg"
-              title="Toggle Left Code & Files Drawer"
-            >
-              <span>{leftOpen ? "◀ Collapse Files" : "📂 Expand Files ▶"}</span>
+      {/* ---------- BODY ---------- */}
+      <div className="flex min-h-0 flex-1">
+        {/* PREVIEW (left) */}
+        <div
+          className="flex min-w-0 flex-col"
+          style={{ width: `${previewWidth}%` }}
+        >
+          <div className="flex h-9 shrink-0 items-center gap-1 border-b border-slate-800 bg-slate-900 px-2">
+            <button className={vpCls(viewport === "autofit")} onClick={() => setViewport("autofit")}>
+              Auto Fit
             </button>
-          )}
-        </div>
-
-        <div className="flex items-center gap-3">
-          <span className="text-[11px] text-zinc-500 hidden sm:inline">Lovable-Grade Workspace Control:</span>
-          <button
-            onClick={() => {
-              setFullscreenPreview(!fullscreenPreview);
-              if (!fullscreenPreview) {
-                setLeftOpen(false);
-                setRightOpen(false);
-              } else {
-                setLeftOpen(true);
-                setRightOpen(true);
-              }
-            }}
-            className={`px-3 py-1 rounded-lg transition flex items-center gap-1.5 border ${
-              fullscreenPreview
-                ? "bg-orange-600 text-white border-orange-500 shadow-md shadow-orange-600/30"
-                : "bg-white/5 border-white/10 text-zinc-300 hover:text-white hover:bg-white/10"
-            }`}
-            title="Toggle Fullscreen Live Preview Screen"
-          >
-            <span>{fullscreenPreview ? "❌ Exit Fullscreen" : "⛶ Fullscreen Preview"}</span>
-          </button>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {!fullscreenPreview && (
-            <button
-              onClick={() => setRightOpen(!rightOpen)}
-              className="hover:text-white transition flex items-center gap-1 bg-white/5 border border-white/5 px-2.5 py-1 rounded-lg"
-              title="Toggle Right Shang Tsung AI Dojo Master Drawer"
-            >
-              <span>{rightOpen ? "Shang Tsung ▶" : "◀ Expand Shang Tsung"}</span>
+            <button className={vpCls(viewport === "desktop")} onClick={() => setViewport("desktop")}>
+              🖥️
             </button>
-          )}
-        </div>
-      </div>
-
-      {/* Main 3-Column Studio Grid with Draggable Resizable Splitter Columns */}
-      <div className="flex-1 flex overflow-hidden relative select-none">
-        {/* Column 1: Left Panel (Files & Versions Tree) — Draggable Width */}
-        {!fullscreenPreview && leftOpen && (
-          <div
-            style={{ width: `${leftWidth}px` }}
-            className="border-r border-white/10 bg-black/40 flex flex-col h-full overflow-hidden shrink-0 transition-none"
-          >
-            {/* Panel Tabs */}
-            <div className="flex border-b border-white/10 p-2 gap-1 bg-[#09090b]">
-              <button
-                onClick={() => setActiveTab("FILES")}
-                className={`flex-1 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
-                  activeTab === "FILES" ? "bg-white/10 text-white shadow-inner" : "text-zinc-400 hover:text-white"
-                }`}
-              >
-                <span>📂</span> Files ({project.files?.length || 0})
-              </button>
-              <button
-                onClick={() => setActiveTab("VERSIONS")}
-                className={`flex-1 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
-                  activeTab === "VERSIONS" ? "bg-white/10 text-white shadow-inner" : "text-zinc-400 hover:text-white"
-                }`}
-              >
-                <span>⏱️</span> History ({project.versions?.length || 0})
-              </button>
-            </div>
-
-            {/* Files List View */}
-            {activeTab === "FILES" && (
-              <div className="flex-1 overflow-y-auto p-3 space-y-1">
-                {project.files && project.files.length > 0 ? (
-                  project.files.map((file) => (
-                    <button
-                      key={file.id || file.file_path}
-                      onClick={() => setSelectedFile(file)}
-                      className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-mono transition flex items-center gap-2.5 ${
-                        selectedFile?.file_path === file.file_path
-                          ? "bg-orange-500/15 text-orange-400 border border-orange-500/30 font-bold"
-                          : "text-zinc-400 hover:bg-white/5 hover:text-white border border-transparent"
-                      }`}
-                    >
-                      <span>{getFileIcon(file.file_path)}</span>
-                      <span className="truncate">{file.file_path}</span>
-                    </button>
-                  ))
-                ) : (
-                  <div className="p-8 text-center text-zinc-500 text-xs">
-                    No code files generated yet. Click Re-Generate Code above.
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Versions History View */}
-            {activeTab === "VERSIONS" && (
-              <div className="flex-1 overflow-y-auto p-3 space-y-2">
-                {project.versions && project.versions.length > 0 ? (
-                  project.versions.map((ver) => (
-                    <div
-                      key={ver.id}
-                      className="p-3.5 rounded-2xl bg-white/[0.02] border border-white/5 hover:border-white/15 transition flex flex-col justify-between gap-2"
-                    >
-                      <div>
-                        <div className="flex items-center justify-between text-[11px] font-mono mb-1">
-                          <span className="font-bold text-orange-400">v{ver.version_number}</span>
-                          <span className="text-zinc-500">{new Date(ver.created_at).toLocaleTimeString()}</span>
-                        </div>
-                        <p className="text-xs font-medium text-white line-clamp-2">{ver.label || "Auto-saved snapshot"}</p>
-                      </div>
-                      <button
-                        onClick={() => handleRestoreVersion(ver.id, ver.label)}
-                        disabled={restoring === ver.id}
-                        className="w-full mt-2 py-1.5 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-[11px] font-bold text-zinc-300 hover:text-white transition disabled:opacity-50"
-                      >
-                        {restoring === ver.id ? "Restoring..." : "↩ Restore This Version"}
-                      </button>
-                    </div>
-                  ))
-                ) : (
-                  <div className="p-8 text-center text-zinc-500 text-xs">No version snapshots recorded yet.</div>
-                )}
-              </div>
-            )}
-
-            {/* Code Viewer Drawer */}
-            {selectedFile && (
-              <div className="h-64 border-t border-white/10 bg-black/60 flex flex-col overflow-hidden shrink-0">
-                <div className="px-3 py-2 border-b border-white/10 flex items-center justify-between bg-[#09090b]">
-                  <span className="text-[11px] font-mono font-bold text-orange-400 flex items-center gap-1.5 truncate">
-                    <span>{getFileIcon(selectedFile.file_path)}</span> {selectedFile.file_path}
-                  </span>
-                  <span className="text-[10px] bg-white/10 px-2 py-0.5 rounded text-zinc-400 uppercase font-bold">
-                    {selectedFile.language}
-                  </span>
-                </div>
-                <div className="flex-1 overflow-auto p-3 font-mono text-[11px] text-zinc-300 leading-relaxed whitespace-pre selection:bg-orange-500 selection:text-white">
-                  {selectedFile.content}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Splitter Bar 1: Between Left Panel & Center Preview */}
-        {!fullscreenPreview && leftOpen && (
-          <div
-            onMouseDown={() => setIsResizingLeft(true)}
-            onDoubleClick={() => setLeftWidth(300)}
-            className="w-1.5 bg-white/5 hover:bg-orange-500/60 active:bg-orange-500 cursor-col-resize shrink-0 transition-colors flex items-center justify-center text-[8px] text-zinc-600 hover:text-white z-20"
-            title="Drag to resize left files panel (Double-click to snap back)"
-          >
-            ⋮
-          </div>
-        )}
-
-        {/* Column 2: Center Panel (Live Interactive Preview Iframe) — Responsive Scaling */}
-        <div className="flex-1 flex flex-col h-full bg-[#020617] overflow-hidden relative min-w-0">
-          {/* Iframe Top Bar */}
-          <div className="h-12 border-b border-white/10 bg-[#09090b] px-4 flex items-center justify-between gap-3 shrink-0">
-            {/* Route Path Input Bar */}
-            <div className="flex items-center gap-2 flex-1 max-w-md bg-black/50 border border-white/10 rounded-xl px-3 py-1.5">
-              <span className="text-zinc-500 text-xs">🌐</span>
-              <input
-                type="text"
-                value={previewPath}
-                onChange={(e) => setPreviewPath(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && setPreviewKey(Date.now())}
-                placeholder="/"
-                className="bg-transparent border-none text-xs text-white font-mono w-full focus:outline-none"
-              />
-              <button
-                onClick={() => setPreviewKey(Date.now())}
-                className="text-zinc-400 hover:text-white text-xs"
-                title="Refresh Preview Iframe"
-              >
-                🔄
-              </button>
-            </div>
-
-            {/* Device Viewport Toggle Buttons */}
-            <div className="flex items-center gap-1 bg-black/40 border border-white/10 p-1 rounded-xl">
-              <button
-                onClick={() => setViewport("DESKTOP")}
-                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
-                  viewport === "DESKTOP" ? "bg-orange-500/20 text-orange-400 border border-orange-500/30" : "text-zinc-400 hover:text-white"
-                }`}
-                title="Desktop Viewport (100% width)"
-              >
-                🖥️ <span className="hidden sm:inline">Desktop</span>
-              </button>
-              <button
-                onClick={() => setViewport("TABLET")}
-                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
-                  viewport === "TABLET" ? "bg-orange-500/20 text-orange-400 border border-orange-500/30" : "text-zinc-400 hover:text-white"
-                }`}
-                title="Tablet Viewport (768px width)"
-              >
-                📱 <span className="hidden sm:inline">Tablet</span>
-              </button>
-              <button
-                onClick={() => setViewport("MOBILE")}
-                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
-                  viewport === "MOBILE" ? "bg-orange-500/20 text-orange-400 border border-orange-500/30" : "text-zinc-400 hover:text-white"
-                }`}
-                title="Mobile Viewport (375px width)"
-              >
-                📲 <span className="hidden sm:inline">Mobile</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Iframe Viewport Container */}
-          <div className="flex-1 flex items-center justify-center p-2 sm:p-4 overflow-auto bg-black/40 relative w-full h-full">
-            <div
-              className={`h-full bg-slate-950 rounded-2xl border border-white/10 shadow-2xl overflow-hidden transition-all duration-300 ${
-                viewport === "DESKTOP" ? "w-full" : viewport === "TABLET" ? "w-[768px] max-w-full" : "w-[375px] max-w-full"
-              }`}
+            <button className={vpCls(viewport === "tablet")} onClick={() => setViewport("tablet")}>
+              📱
+            </button>
+            <button className={vpCls(viewport === "mobile")} onClick={() => setViewport("mobile")}>
+              📲
+            </button>
+            <div className="flex-1" />
+            <button
+              className="rounded px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
+              onClick={() => setPreviewKey((k) => k + 1)}
+              title="Reload preview"
             >
-              <iframe
-                key={previewKey}
-                src={previewUrl}
-                title="Lovable-Grade Live App Preview"
-                className="w-full h-full border-none bg-[#09090b]"
-                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
-              />
-            </div>
+              ↻
+            </button>
+            <button
+              className="rounded px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
+              onClick={() => window.open(previewSrc, "_blank")}
+              title="Open in new tab"
+            >
+              ⧉
+            </button>
+          </div>
+          <div className="relative min-h-0 flex-1 bg-white">
+            <iframe
+              key={previewKey}
+              src={previewSrc}
+              title="preview"
+              className="absolute inset-0 border-0"
+              style={viewportStyle(viewport)}
+            />
           </div>
         </div>
 
-        {/* Splitter Bar 2: Between Center Preview & Right Panel */}
-        {!fullscreenPreview && rightOpen && (
-          <div
-            onMouseDown={() => setIsResizingRight(true)}
-            onDoubleClick={() => setRightWidth(380)}
-            className="w-1.5 bg-white/5 hover:bg-orange-500/60 active:bg-orange-500 cursor-col-resize shrink-0 transition-colors flex items-center justify-center text-[8px] text-zinc-600 hover:text-white z-20"
-            title="Drag to resize right Shang Tsung panel (Double-click to snap back)"
-          >
-            ⋮
-          </div>
-        )}
+        {/* DIVIDER (drag to stretch preview) */}
+        <div
+          onMouseDown={() => setDragging(true)}
+          className="w-1 shrink-0 cursor-col-resize bg-slate-800 hover:bg-violet-500"
+          title="Drag to resize"
+        />
 
-        {/* Column 3: Right Panel (Shang Tsung AI Dojo Master) — Draggable Width */}
-        {!fullscreenPreview && rightOpen && (
-          <div
-            style={{ width: `${rightWidth}px` }}
-            className="border-l border-white/10 bg-[#09090b] flex flex-col h-full overflow-hidden shrink-0 transition-none"
-          >
-            {/* Shang Tsung Header */}
-            <div className="h-12 border-b border-white/10 px-4 flex items-center justify-between bg-black/40 shrink-0">
-              <div className="flex items-center gap-2">
-                <span className="text-base">🥋</span>
-                <span className="font-black text-white text-xs tracking-tight">Shang Tsung AI Dojo Master</span>
-              </div>
-              <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full font-bold">
-                Online
-              </span>
+        {/* CHAT (right) */}
+        <div className="flex min-w-0 flex-1 flex-col border-l border-slate-800">
+          {/* toolbar: Chat / Code switch + ZIP */}
+          <div className="flex h-11 shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900 px-3">
+            <div className="flex gap-1">
+              <button className={tabCls(view === "chat")} onClick={() => setView("chat")}>
+                💬 Chat
+              </button>
+              <button className={tabCls(view === "code")} onClick={() => setView("code")}>
+                ⟨⟩ Code
+              </button>
             </div>
+            <button
+              onClick={() => (window.location.href = `/api/projects/${id}/export/zip`)}
+              className="rounded-md bg-violet-600 px-3 py-1 text-xs font-semibold text-white hover:bg-violet-500"
+            >
+              ⬇ Download ZIP
+            </button>
+          </div>
 
-            {/* Permanent Quick Command Suggestions Bar (ALWAYS VISIBLE AT TOP OF PANEL) */}
-            <div className="border-b border-white/10 bg-black/30 p-3 shrink-0">
-              <div className="flex items-center justify-between mb-2">
+          {view === "chat" ? (
+            <>
+              {/* QUICK COMMANDS (pinned, untouched logic) */}
+              <div className="flex shrink-0 items-center gap-2 overflow-x-auto border-b border-slate-800 bg-slate-900/60 px-3 py-2">
                 <button
-                  onClick={() => setShowSuggestionsDrawer(!showSuggestionsDrawer)}
-                  className="text-[11px] font-black uppercase text-orange-400 flex items-center gap-1.5 hover:text-white transition"
+                  onClick={shuffle}
+                  title="Shuffle quick commands"
+                  className="shrink-0 rounded-md bg-violet-600/20 px-2 py-1 text-sm text-violet-200 hover:bg-violet-600/40"
                 >
-                  <span>💡</span> Tailored Quick Commands {showSuggestionsDrawer ? "▼" : "▶"}
+                  ✨
                 </button>
-                <button
-                  onClick={fetchQuickCommands}
-                  disabled={shufflingSuggestions}
-                  className="px-2 py-0.5 rounded bg-white/5 border border-white/10 text-zinc-400 hover:text-white text-[10px] font-bold transition flex items-center gap-1 disabled:opacity-50"
-                  title="Shuffle and generate fresh project-tailored commands"
-                >
-                  <span>✨</span> {shufflingSuggestions ? "Shuffling..." : "Shuffle"}
-                </button>
-              </div>
-
-              {showSuggestionsDrawer && (
-                <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-                  {quickCommands.map((cmd, i) => (
+                {quick.length === 0 && (
+                  <span className="text-xs text-slate-500">No quick commands yet.</span>
+                )}
+                {quick.slice(0, 6).map((c, i) => {
+                  const label = c.label || c.text || c.command || "Command";
+                  const value = c.text || c.command || c.label || "";
+                  return (
                     <button
                       key={i}
-                      onClick={() => handleSendMessage(undefined, cmd)}
-                      disabled={chatting}
-                      className="w-full text-left p-2 rounded-xl border border-white/5 bg-white/[0.02] hover:border-orange-500/40 hover:bg-orange-500/10 text-[11px] text-zinc-300 hover:text-white transition disabled:opacity-50 line-clamp-2 leading-snug font-medium"
+                      onClick={() => send(value)}
+                      title={value}
+                      className="shrink-0 whitespace-nowrap rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300 hover:border-violet-500 hover:text-violet-200"
                     >
-                      💡 {cmd}
+                      {label}
                     </button>
-                  ))}
-                </div>
-              )}
-            </div>
+                  );
+                })}
+              </div>
 
-            {/* Chat Messages Feed */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
-              {messages.length === 0 ? (
-                <div className="border border-white/10 bg-white/[0.02] rounded-2xl p-5 text-center">
-                  <div className="w-12 h-12 rounded-full bg-orange-500/10 border border-orange-500/20 flex items-center justify-center text-orange-400 text-xl mx-auto mb-3">
-                    🥋
-                  </div>
-                  <h4 className="font-black text-white text-sm mb-1">Your AI Dojo Master</h4>
-                  <p className="text-zinc-400 text-xs leading-relaxed">
-                    Tell me what to change or pick any Quick Command above. I automatically extract clean vector SVG logos and refresh your preview!
-                  </p>
-                </div>
-              ) : (
-                messages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`flex flex-col gap-1 ${msg.role === "user" ? "items-end" : "items-start"}`}
-                  >
-                    <div className="flex items-center gap-1.5 px-1">
-                      <span className="text-[10px] font-bold text-zinc-500 uppercase">
-                        {msg.role === "user" ? "You" : "🥋 Shang Tsung"}
-                      </span>
-                    </div>
-                    <div
-                      className={`rounded-2xl p-3.5 text-xs leading-relaxed max-w-[92%] font-medium ${
-                        msg.role === "user"
-                          ? "bg-gradient-to-r from-orange-600 to-amber-600 text-white rounded-br-none shadow-md shadow-orange-600/20"
-                          : "bg-white/[0.04] border border-white/10 text-zinc-200 rounded-bl-none shadow-xl whitespace-pre-wrap"
-                      }`}
-                    >
-                      {msg.message}
-                    </div>
-                  </div>
-                ))
-              )}
-              {chatting && (
-                <div className="flex flex-col gap-1 items-start">
-                  <div className="rounded-2xl rounded-bl-none p-4 bg-white/[0.04] border border-white/10 text-zinc-400 text-xs flex items-center gap-3 shadow-lg">
-                    <div className="w-4 h-4 border-2 border-orange-500 border-t-transparent rounded-full animate-spin shrink-0" />
-                    <span>Shang Tsung is analyzing, creating vector SVGs, and editing your code...</span>
-                  </div>
-                </div>
-              )}
-              <div ref={messagesEndRef} />
-            </div>
+              {/* MESSAGES (last 10 only) */}
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
+                {visible.map((m) => (
+                  <MessageBubble
+                    key={m.id}
+                    m={m}
+                    rating={m.metadata?.rating}
+                    onRate={(r) => rateMessage(m.id, r)}
+                  />
+                ))}
+                {thinking && <ThinkingBubble />}
+                <div ref={chatEnd} />
+              </div>
 
-            {/* Chat Input Bar */}
-            <form onSubmit={handleSendMessage} className="p-3 border-t border-white/10 bg-black/40 shrink-0">
-              <div className="relative flex items-center">
+              {/* INPUT */}
+              <div className="flex shrink-0 items-center gap-2 border-t border-slate-800 bg-slate-900 p-3">
                 <input
-                  type="text"
-                  value={inputMessage}
-                  onChange={(e) => setInputMessage(e.target.value)}
-                  disabled={chatting}
-                  placeholder="Instruct Shang Tsung what to change or create..."
-                  className="w-full bg-[#09090b] border border-white/10 rounded-xl pl-4 pr-12 py-3 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-orange-500 transition-colors disabled:opacity-50"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && send(input)}
+                  placeholder="Tell Shang Tsung what to build…"
+                  className="flex-1 rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-violet-500"
                 />
                 <button
-                  type="submit"
-                  disabled={!inputMessage.trim() || chatting}
-                  className="absolute right-2 rounded-lg bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 w-8 h-8 flex items-center justify-center text-white text-xs font-bold transition disabled:opacity-30 shadow-md shadow-orange-600/20"
-                  title="Send Command"
+                  onClick={() => send(input)}
+                  disabled={thinking}
+                  className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-500 disabled:opacity-50"
                 >
-                  ↑
+                  Send
                 </button>
+                <Link
+                  href={`/projects/${id}/history`}
+                  title="Chat history"
+                  className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:border-violet-500 hover:text-violet-200"
+                >
+                  🕘
+                </Link>
               </div>
-              <p className="text-[10px] text-zinc-500 mt-2 px-1 text-center">
-                Shang Tsung auto-modifies code, creates vector logos (`components/Logo.tsx`), and refreshes preview.
-              </p>
-            </form>
-          </div>
-        )}
+            </>
+          ) : (
+            <div className="min-h-0 flex-1">
+              <CodeViewer files={files} />
+            </div>
+          )}
+        </div>
       </div>
     </div>
+  );
+}
+
+export default function ForgePage() {
+  return (
+    <ToastProvider>
+      <ForgeInner />
+    </ToastProvider>
   );
 }

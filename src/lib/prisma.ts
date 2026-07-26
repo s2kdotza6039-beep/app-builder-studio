@@ -1,26 +1,20 @@
 ﻿import { PrismaClient } from "@prisma/client";
 
-declare global {
-  // eslint-disable-next-line no-var
-  var __prisma: PrismaClient | undefined;
-}
+// Singleton Prisma client — prevents too-many-connections in dev hot-reload.
+const globalForPrisma = globalThis as unknown as {
+  prisma: PrismaClient | undefined;
+};
 
-function createPrismaClient() {
-  return new PrismaClient({
-    log:
-      process.env.NODE_ENV === "development"
-        ? ["error", "warn"]
-        : ["error"],
-    datasources: {
-      db: {
-        url: process.env.DATABASE_URL,
-      },
-    },
+const prisma =
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    log: ["error", "warn"],
   });
-}
-
-export const prisma = global.__prisma ?? createPrismaClient();
 
 if (process.env.NODE_ENV !== "production") {
-  global.__prisma = prisma;
+  globalForPrisma.prisma = prisma;
 }
+
+// Export BOTH ways so every file's import style works:
+export { prisma };
+export default prisma;

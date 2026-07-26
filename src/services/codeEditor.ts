@@ -1,258 +1,335 @@
-import { OpenAI } from "openai";
-
-const USE_MOCK = false;
-
-export interface EditInputFile {
-  id: string;
-  file_path: string;
-  content: string;
-  language: string;
-}
-
-export interface EditInput {
-  instruction: string;
-  files: EditInputFile[];
-}
-
-export interface UpdatedFile {
-  id: string;
-  file_path: string;
-  content: string;
-}
-
-export interface NewFile {
-  file_path: string;
-  content: string;
-  language: string;
-}
+import { prisma } from "@/lib/prisma";
+import { callOpenAI } from "./openaiClient";
+import { forgeChatResponseSchema, FileChange } from "./aiSchemas";
 
 export interface EditResult {
   reply: string;
-  updatedFiles: UpdatedFile[];
-  newFiles: NewFile[];
+  filesChanged: number;
+  created: number;
+  updated: number;
+  deleted: number;
 }
 
-export async function editProjectCode(input: EditInput): Promise<EditResult> {
-  if (USE_MOCK) {
-    return mockEditCode(input);
-  }
-  return realAIEditCode(input);
+/* ------------------------------------------------------------------ */
+/*  Path + content helpers                                            */
+/* ------------------------------------------------------------------ */
+
+// Normalises AI-returned paths to the DB convention: app/page.tsx (no
+// leading slash, no ./, no src/ prefix). This is THE fix for the
+// "command shows in chat but edits nothing" bug.
+function cleanPath(p: string): string {
+  return (p || "")
+    .trim()
+    .replace(/\\/g, "/") // windows backslashes
+    .replace(/^(\.\/|\/)+/, "") // leading ./ or /
+    .replace(/^src\//i, "") // src/ prefix
+    .replace(/\/+/g, "/") // double slashes
+    .replace(/^\/+/, "")
+    .trim();
 }
 
-function mockEditCode(input: EditInput): EditResult {
-  const raw = input.instruction.toLowerCase().trim();
-  const updated: UpdatedFile[] = [];
-  const newFiles: NewFile[] = [];
-
-  const file = (path: string) =>
-    input.files.find((f) => f.file_path.toLowerCase() === path.toLowerCase());
-  const home = file("app/page.tsx");
-
-  function pushUpdate(f: EditInputFile | undefined, newContent: string): boolean {
-    if (!f) return false;
-    updated.push({ id: f.id, file_path: f.file_path, content: newContent });
-    return true;
+function inferLang(path: string): string {
+  const ext = path.split(".").pop()?.toLowerCase();
+  switch (ext) {
+    case "tsx": return "tsx";
+    case "ts": return "typescript";
+    case "jsx": return "jsx";
+    case "js": return "javascript";
+    case "css": return "css";
+    case "json": return "json";
+    case "md": return "markdown";
+    case "html": return "html";
+    case "svg": return "svg";
+    default: return "text";
   }
-
-  if (raw.includes("logo") || raw.includes("graphic") || raw.includes("svg")) {
-    newFiles.push({
-      file_path: "components/Logo.tsx",
-      language: "typescript",
-      content: [
-        `export default function Logo({ className = "w-8 h-8" }: { className?: string }) {`,
-        `  return (`,
-        `    <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>`,
-        `      <defs>`,
-        `        <linearGradient id="lovableGlow" x1="0%" y1="0%" x2="100%" y2="100%">`,
-        `          <stop offset="0%" stopColor="#f97316" />`,
-        `          <stop offset="50%" stopColor="#ec4899" />`,
-        `          <stop offset="100%" stopColor="#6366f1" />`,
-        `        </linearGradient>`,
-        `      </defs>`,
-        `      <circle cx="50" cy="50" r="46" fill="url(#lovableGlow)" fill-opacity="0.15" stroke="url(#lovableGlow)" stroke-width="4" />`,
-        `      <path d="M32 68L48 28L68 68L50 54L32 68Z" fill="url(#lovableGlow)" />`,
-        `      <circle cx="50" cy="38" r="6" fill="#ffffff" />`,
-        `    </svg>`,
-        `  );`,
-        `}`,
-      ].join("\n"),
-    });
-    return {
-      reply: [
-        "Created high-end vector SVG brand logo (`components/Logo.tsx`) with dynamic gradient geometry and glow paths! ✅",
-        "",
-        "💡 PROACTIVE ARCHITECT SUGGESTION: Next, let's import `<Logo className=\"w-9 h-9\" />` into `components/Navigation.tsx` so your brand identity anchors every page of your application!",
-      ].join("\n"),
-      updatedFiles: [],
-      newFiles,
-    };
-  }
-
-  return {
-    reply: [
-      "I am Shang Tsung, your AI Dojo Master.",
-      "Tell me what visual upgrades, logos, pages, or security features to apply!",
-      "",
-      "💡 PROACTIVE ARCHITECT SUGGESTION: Ask me to create a custom vector brand logo (`components/Logo.tsx`) or an interactive SaaS pricing calculator!",
-    ].join("\n"),
-    updatedFiles: [],
-    newFiles: [],
-  };
 }
 
-async function realAIEditCode(input: EditInput): Promise<EditResult> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    return {
-      reply: "OpenAI API Key (`OPENAI_API_KEY`) is missing in `.env`. Please add your key to unlock real AI editing.",
-      updatedFiles: [],
-      newFiles: [],
-    };
+// Strips ```tsx ... ``` fences the model sometimes wraps content in.
+function stripCodeFences(s: string): string {
+  const t = (s || "").trim();
+  const fence = t.match(/^```[a-zA-Z0-9]*\n([\s\S]*?)\n```$/);
+  if (fence) return fence[1].trim();
+  return t;
+}
+
+/* ------------------------------------------------------------------ */
+/*  JSON extraction (defensive — survives markdown wrapping)          */
+/* ------------------------------------------------------------------ */
+
+function extractJson(text: string): any | null {
+  try {
+    return JSON.parse(text);
+  } catch {
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start !== -1 && end !== -1 && end > start) {
+      try {
+        return JSON.parse(text.slice(start, end + 1));
+      } catch {
+        return null;
+      }
+    }
+    return null;
   }
+}
 
-  const openai = new OpenAI({ apiKey });
+// Accepts the AI's many naming variants for the file list.
+function normalizeFiles(raw: any): FileChange[] {
+  if (!raw || typeof raw !== "object") return [];
+  const arr =
+    raw.files ??
+    raw.updatedFiles ??
+    raw.createdFiles ??
+    raw.modifiedFiles ??
+    [];
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .map((f: any) => ({
+      file_path: f?.file_path ?? f?.path ?? f?.filename ?? "",
+      content: typeof f?.content === "string" ? stripCodeFences(f.content) : "",
+      action: ["create", "update", "delete"].includes(f?.action)
+        ? (f.action as "create" | "update" | "delete")
+        : ("update" as const),
+    }))
+    .filter((f: FileChange) => cleanPath(f.file_path).length > 0);
+}
 
-  const fileList = input.files
-    .map((f) => `=== FILE: ${f.file_path} ===\n${f.content}`)
+/* ------------------------------------------------------------------ */
+/*  Traffic-Light preferences (learned from message ratings)         */
+/* ------------------------------------------------------------------ */
+
+function buildPrefs(rated: any[]): string {
+  const pick = (r: string) =>
+    rated
+      .filter((x) => (x.metadata as any)?.rating === r)
+      .map((x) => x.message)
+      .filter(Boolean)
+      .slice(0, 12);
+  const green = pick("green");
+  const orange = pick("orange");
+  const red = pick("red");
+  const parts: string[] = [];
+  if (green.length)
+    parts.push(`GREEN (user loves / absolute pass — do more of this):\n- ${green.join("\n- ")}`);
+  if (orange.length)
+    parts.push(`ORANGE (partial pass — refine these):\n- ${orange.join("\n- ")}`);
+  if (red.length)
+    parts.push(`RED (user dislikes — avoid this):\n- ${red.join("\n- ")}`);
+  return parts.join("\n\n");
+}
+
+/* ------------------------------------------------------------------ */
+/*  System prompt — strict, secure, design-aware                     */
+/* ------------------------------------------------------------------ */
+
+const SYSTEM_PROMPT = `You are SHANG TSUNG, the elite AI engine powering "App Builder Studio". You are a Senior Full-Stack Engineer, App Architect, and Security Expert. Your output matches the production quality of platforms like Lovable.
+
+CORE RULES (violation = failure):
+1. FILE PATHS: Always use paths relative to the project root with NO leading slash and NO "src/" prefix.
+   CORRECT:   app/page.tsx, app/about/page.tsx, components/Navigation.tsx, components/Logo.tsx
+   WRONG:     /app/page.tsx, ./app/page.tsx, src/app/page.tsx
+2. OUTPUT FORMAT: Respond with ONLY a JSON object, no markdown, no commentary outside the JSON:
+   {
+     "reply": "A short, friendly message to the user describing what you did.",
+     "files": [
+       { "file_path": "app/page.tsx", "action": "update", "content": "FULL file content here" }
+     ]
+   }
+   - action is "create" | "update" | "delete".
+   - For "delete", content can be empty.
+   - Always return the COMPLETE file content, never snippets like "// rest of code".
+3. NEVER use placeholders, TODOs, or "insert code here". Every line must be production-ready.
+4. SECURITY: Escape user input, avoid eval/dangerous innerHTML, follow OWASP basics.
+5. FOLLOW INSTRUCTIONS EXACTLY. If the user asks to change a title, change ONLY that and keep the rest intact.
+
+CREATE vs EDIT — THIS IS THE #1 MISTAKE, NEVER DO IT:
+- If the user asks to CREATE, ADD, BUILD, or MAKE a NEW page / component / feature, you MUST use action: "create" with a BRAND-NEW file_path that does NOT already exist in the file tree.
+- NEVER fake a "new" thing by editing an existing file. Example: to build an About page, CREATE app/about/page.tsx — do NOT edit app/page.tsx.
+- If the user asks to CHANGE or FIX an existing page, use action: "update" with that exact existing path.
+- Look at the FILE TREE given to you. Do not recreate files that already exist.
+
+NEW PAGE / ROUTE CONVENTIONS (use these exact paths):
+- Home page:    app/page.tsx
+- Other page:   app/<name>/page.tsx   (About -> app/about/page.tsx, Contact -> app/contact/page.tsx)
+- Reusable UI:  components/<Name>.tsx  (components/Navbar.tsx, components/Logo.tsx)
+- When you create 2 or more pages, ALSO create a navigation (components/Navbar.tsx, or a nav bar inside app/layout.tsx) with working links so every page is reachable. Use plain <a href="/about"> links (Next.js <Link> is auto-stubbed to <a> in the live preview).
+
+EXAMPLE — user says "Create an About page with a big heading 'About Us'":
+{
+  "reply": "Done! I created your About page at app/about/page.tsx. 🧠",
+  "files": [
+    { "file_path": "app/about/page.tsx", "action": "create", "content": "export default function AboutPage() {\n  return (\n    <main className=\"min-h-screen p-10\">\n      <h1 className=\"text-4xl font-bold\">About Us</h1>\n      <p className=\"mt-4 text-slate-600\">Welcome to our story.</p>\n    </main>\n  );\n}\n" }
+  ]
+}
+
+DESIGN & LOGO MASTERY (professional, up-class):
+- When asked for a logo or graphic, produce a clean, modern SVG component using viewBox, gradients, and geometric paths.
+- Use sophisticated, professional palettes only: charcoal #1e293b with warm amber #f59e0b, emerald #10b981 with jade, or deep navy with gold. Never neon/clashing colors.
+- Components must be valid React + Tailwind, self-contained, and import nothing that does not exist.
+- Respect the existing file tree — edit the right files, create new ones only when needed.
+
+EXPANDED KNOWLEDGE BASE — you are fluent in:
+- FRAMEWORKS: Next.js 16 (App Router, Server & Client Components, Route Handlers, Middleware), React 19 (hooks, Suspense, transitions), Vite + React.
+- LANGUAGES: TypeScript (strict), JavaScript (ES2024), HTML5, CSS3.
+- STYLING: Tailwind CSS v4, CSS Modules, responsive utility classes, design tokens.
+- UI COMPONENTS: shadcn/ui patterns, Radix primitives, Lucide icons, custom accessible components.
+- STATE: React Context, useReducer, Zustand, TanStack Query for server state, URL state.
+- DATA & BACKEND: Next.js Route Handlers, Prisma ORM, PostgreSQL, REST API design, JSON responses.
+- AUTH & USERS: Auth.js / NextAuth sessions, protected routes, role-based access, middleware guards.
+- FORMS & VALIDATION: controlled + uncontrolled forms, Zod schemas, client + server validation.
+- PAYMENTS: Stripe Checkout / webhook patterns, pricing tables, plan gating.
+- MEDIA: image optimization (next/image), SVG generation, file uploads.
+- DEPLOYMENT: Vercel build, environment variables, edge vs node runtime.
+
+ARCHITECTURE PRINCIPLES (apply by default):
+- Mobile-first, fully responsive (sm/md/lg/xl breakpoints).
+- Semantic HTML + ARIA for accessibility; sufficient color contrast.
+- Server Components for data fetching; Client Components only where interactivity is needed.
+- Small, composable components — one responsibility each; co-locate related files.
+- One design system: define colors, spacing, radius, typography once and reuse.
+
+APP-TYPE PLAYBOOK (recognize intent and scaffold accordingly):
+- SaaS Dashboard: sidebar nav, auth, settings, data tables, charts.
+- Landing Page: hero, features, testimonials, pricing, CTA, footer.
+- E-commerce: product grid, cart, checkout, order history.
+- Blog/CMS: post list, article view, categories, markdown rendering.
+- Portfolio/Personal: hero, about, projects, contact form.
+
+You are precise, authoritative, and you ALWAYS deliver working code.`;
+
+/* ------------------------------------------------------------------ */
+/*  Core engine                                                       */
+/* ------------------------------------------------------------------ */
+
+async function tryGenerate(messages: any[]): Promise<ForgeChatResponse | null> {
+  try {
+    const text = await callOpenAI(messages, { json: true });
+    const json = extractJson(text);
+    if (!json) return null;
+    const result = forgeChatResponseSchema.safeParse(json);
+    if (!result.success) return null;
+    return result.data;
+  } catch (e) {
+    console.error("=== EDITOR GENERATE ERROR ===", e);
+    return null;
+  }
+}
+
+export async function editProjectCode(input: {
+  projectId: string;
+  userMessage: string;
+  history: { role: string; content: string }[];
+  pinnedContext?: string;
+}): Promise<EditResult> {
+  const existing = await prisma.projectFile.findMany({
+    where: { project_id: input.projectId },
+  });
+
+  const ratedRows = await prisma.aiMessage.findMany({
+    where: { project_id: input.projectId },
+    orderBy: { created_at: "desc" },
+    take: 120,
+    select: { role: true, message: true, metadata: true },
+  });
+  const rated = ratedRows.filter(
+    (r) => r.metadata && typeof r.metadata === "object" && (r.metadata as any).rating
+  );
+
+  const tree =
+    existing.map((f) => f.file_path).sort().join("\n") || "(no files yet)";
+
+  const historyText = (input.history || [])
+    .slice(-20)
+    .map((m) => `${m.role === "user" ? "USER" : "SHANG TSUNG"}: ${m.content}`)
     .join("\n\n");
 
-  const systemPrompt = [
-    "You are Shang Tsung, the elite AI Architect, Security Expert, and Design Mastermind inside App Builder Studio by S2KDOTZA Entertainment.",
-    "Your output must match the breathtaking, production-ready aesthetic of elite AI builders like Lovable, v0, and Bolt.",
-    "",
-    "INTERNAL MULTI-AGENT ORCHESTRATION & SUPERPOWERS PROTOCOL:",
-    "Before emitting code, your internal engine MUST execute five virtual verification passes:",
-    "1. ARCHITECT PASS: Ensure strict component modularity, clear separation of concerns, and correct Next.js App Router syntax (`app/[route]/page.tsx`). ALWAYS use standard function declarations (`export default function ComponentName() { return (...) }`) — NEVER use arrow functions (`const Comp = () =>`) for top-level exported components or pages to guarantee clean AST compilation.",
-    "2. LOVABLE DESIGN SYSTEM PASS: Apply modern UI/UX design excellence to every page and component:",
-    "   - Color Spectrum & Depth: Use rich, multi-tone dark palettes (bg-[#09090b], bg-zinc-950, bg-slate-950). Add ambient background glows (bg-gradient-to-tr from-orange-500/15 via-purple-500/10 to-transparent blur-[120px]).",
-    "   - Glassmorphism & Cards: Style containers with modern glass aesthetics (border border-white/10 bg-white/[0.03] backdrop-blur-md rounded-2xl shadow-2xl).",
-    "   - Typography Scale: Use high-contrast headings (font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-white via-zinc-200 to-zinc-400) and clean, readable zinc/slate body text.",
-    "   - Micro-Interactions: Buttons and cards must have smooth hover states (transition-all duration-300 hover:-translate-y-1 hover:shadow-orange-500/20 hover:border-white/20).",
-    "3. GRAPHICS & LOGO VECTOR SUPERPOWER (HIGH-END DESIGN):",
-    "   - You possess the ultimate capability to create vector graphics, brand logos, hero illustrations, and UI iconography directly inside React using clean inline SVG vector geometry (`<svg viewBox=\"...\">`).",
-    "   - When the user asks for a logo, graphic, or visual illustration (so they can create logos for their customers!), you MUST create dedicated React vector components (`components/Logo.tsx`, `components/HeroGraphic.tsx`) featuring glowing `<defs><linearGradient>...</linearGradient></defs>`, crisp `<path />` curves, geometric `<circle />` / `<rect />` layers, and customizable props (`{ className = \"w-10 h-10\" }`). Always write them as `export default function Logo({ className = \"w-8 h-8\" }: { className?: string }) { return (...) }`.",
-    "4. USER-CENTRIC FLOW & PROACTIVE SUGGESTIONS:",
-    "   - You must deeply understand the founder's workflow. At the very end of your `reply` string, you MUST ALWAYS include a dedicated section titled:",
-    "     `💡 PROACTIVE ARCHITECT SUGGESTION:` followed by 1 or 2 specific, high-value recommendations on what the founder should ask you to build next to make their app convert better, run faster, or look more professional.",
-    "5. STRICT CLEANUP & DELETION ENFORCEMENT: When instructed to clean up, replace, or remove old/unwanted text or headers from a file, you MUST do a thorough, clean rewrite of that file without leaving obsolete remnants behind.",
-    "",
-    "CRITICAL CODE RULES:",
-    "1. Return ONLY valid JSON matching the exact schema below — no markdown ticks outside JSON, no conversational preambles.",
-    "2. For updatedFiles: provide the COMPLETE modified file content for every existing file. Never return truncated snippets or placeholders (`// rest of code here` is STRICTLY FORBIDDEN).",
-    "3. For newFiles: when instructed to create new pages (`app/pricing/page.tsx`) or components (`components/Logo.tsx`, `components/Footer.tsx`), return complete, beautifully styled Lovable-grade source code using `export default function ComponentName()` syntax.",
-    "4. If an instruction requires editing MULTIPLE files (`app/page.tsx` AND `components/Navigation.tsx`), return BOTH complete files in updatedFiles.",
-    "5. When modifying app/layout.tsx, NEVER remove the {children} placeholder.",
-    "",
-    "Required JSON Response Format:",
-    "{",
-    '  "reply": "Authoritative, professional summary explaining what architectural, logo, or visual enhancements were executed\\n\\n💡 PROACTIVE ARCHITECT SUGGESTION: Specific recommendation for what the user should build or refine next.",',
-    '  "updatedFiles": [',
-    "    {",
-    '      "file_path": "app/page.tsx",',
-    '      "content": "COMPLETE FULL FILE CONTENT HERE"',
-    "    }",
-    "  ],",
-    '  "newFiles": [',
-    "    {",
-    '      "file_path": "components/Logo.tsx",',
-    '      "content": "COMPLETE FULL FILE CONTENT HERE",',
-    '      "language": "typescript"',
-    "    }",
-    "  ]",
-    "}",
-  ].join("\n");
+  const pinnedText = input.pinnedContext
+    ? `\n\n### PINNED USER CONTEXT (always respect this):\n${input.pinnedContext}\n`
+    : "";
 
-  const userMessage = [
-    `Instruction: "${input.instruction}"`,
-    "",
-    "Project's Current Files:",
-    fileList,
-    "",
-    "Remember: Return ONLY valid JSON with complete file contents. Execute all upgrades with elite Lovable design standards, vector SVG logo mastery using standard function declarations, and always include a proactive architect suggestion at the end of your reply.",
-  ].join("\n");
+  const prefsText = rated.length
+    ? `\n\n### USER PREFERENCES (learned from your Traffic-Light ratings — adapt to these):\n${buildPrefs(rated)}\n`
+    : "";
 
-  try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userMessage },
-      ],
-      response_format: { type: "json_object" },
-      temperature: 0.15,
-      max_tokens: 8000,
+  const system = SYSTEM_PROMPT + pinnedText + prefsText;
+  const user = `PROJECT FILE TREE:\n${tree}\n\nRECENT CONVERSATION:\n${historyText}\n\nUSER INSTRUCTION:\n${input.userMessage}\n\nRespond ONLY in the required JSON format.`;
+
+  const messages = [
+    { role: "system" as const, content: system },
+    { role: "user" as const, content: user },
+  ];
+
+  // First attempt
+  let parsed = await tryGenerate(messages);
+
+  // Self-healing retry: re-prompt with a correction if parse failed.
+  if (!parsed) {
+    messages.push({
+      role: "assistant" as const,
+      content: "I will follow the exact JSON format.",
     });
+    messages.push({
+      role: "user" as const,
+      content:
+        'Your previous response was invalid. Return ONLY JSON: {"reply": string, "files": [{file_path, content, action}]}. No markdown. Now apply the user instruction.',
+    });
+    parsed = await tryGenerate(messages);
+  }
 
-    const content = response.choices[0]?.message?.content || "{}";
-    let parsed: {
-      reply?: string;
-      updatedFiles?: Array<{ file_path: string; content: string }>;
-      newFiles?: Array<{ file_path: string; content: string; language?: string }>;
-    };
-
-    try {
-      parsed = JSON.parse(content);
-    } catch {
-      return {
-        reply: "JSON formatting error encountered during generation. Please try re-issuing the instruction.",
-        updatedFiles: [],
-        newFiles: [],
-      };
-    }
-
-    const updatedFiles: UpdatedFile[] = [];
-    if (Array.isArray(parsed.updatedFiles)) {
-      for (const item of parsed.updatedFiles) {
-        if (!item.file_path || !item.content || item.content.trim().length < 10) continue;
-        const original = input.files.find(
-          (f) => f.file_path.toLowerCase() === item.file_path.toLowerCase()
-        );
-        if (original) {
-          updatedFiles.push({
-            id: original.id,
-            file_path: original.file_path,
-            content: item.content,
-          });
-        }
-      }
-    }
-
-    const newFiles: NewFile[] = [];
-    if (Array.isArray(parsed.newFiles)) {
-      for (const item of parsed.newFiles) {
-        if (!item.file_path || !item.content || item.content.trim().length < 10) continue;
-        const alreadyExists = input.files.find(
-          (f) => f.file_path.toLowerCase() === item.file_path.toLowerCase()
-        );
-        if (alreadyExists) {
-          updatedFiles.push({
-            id: alreadyExists.id,
-            file_path: alreadyExists.file_path,
-            content: item.content,
-          });
-        } else {
-          newFiles.push({
-            file_path: item.file_path,
-            content: item.content,
-            language: item.language || (item.file_path.endsWith(".json") ? "json" : "typescript"),
-          });
-        }
-      }
-    }
-
+  if (!parsed) {
     return {
       reply:
-        parsed.reply ||
-        "Done. Elite Lovable design upgrades and vector graphics applied successfully.\n\n💡 PROACTIVE ARCHITECT SUGGESTION: Check your preview and ask me to create custom sub-components or interactive sections anytime!",
-      updatedFiles,
-      newFiles,
-    };
-  } catch (error: any) {
-    console.error("Real AI edit error:", error);
-    return {
-      reply: `Error: ${error.message || "OpenAI API request failed. Please check your API key configuration."}`,
-      updatedFiles: [],
-      newFiles: [],
+        "I received your instruction but couldn't produce valid changes. Please rephrase it clearly (e.g. 'Change the homepage title to Welcome').",
+      filesChanged: 0,
+      created: 0,
+      updated: 0,
+      deleted: 0,
     };
   }
+
+  // Apply file changes to the database.
+  let created = 0;
+  let updated = 0;
+  let deleted = 0;
+
+  const files = normalizeFiles(parsed);
+  for (const fc of files) {
+    const path = cleanPath(fc.file_path);
+    if (!path) continue;
+
+    const match = existing.find(
+      (f) => f.file_path.toLowerCase() === path.toLowerCase()
+    );
+
+    if (fc.action === "delete") {
+      if (match) {
+        await prisma.projectFile.delete({ where: { id: match.id } });
+        deleted++;
+      }
+      continue;
+    }
+
+    if (match) {
+      await prisma.projectFile.update({
+        where: { id: match.id },
+        data: { content: fc.content, language: inferLang(path), updated_at: new Date() },
+      });
+      updated++;
+    } else {
+      await prisma.projectFile.create({
+        data: {
+          project_id: input.projectId,
+          file_path: path,
+          content: fc.content,
+          language: inferLang(path),
+        },
+      });
+      created++;
+    }
+  }
+
+  const filesChanged = created + updated + deleted;
+  const reply = parsed.reply || "Done — I updated your project files.";
+
+  return { reply, filesChanged, created, updated, deleted };
 }

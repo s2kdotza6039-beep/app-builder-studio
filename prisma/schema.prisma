@@ -30,6 +30,7 @@ model User {
   projects          Project[]
   sessions          Session[]
   subscriptions     Subscription[]
+  user_assets UserAsset[]
 
   @@map("users")
 }
@@ -289,4 +290,18 @@ enum PaymentStatus {
   SUCCESS
   FAILED
   REFUNDED
+}
+
+model UserAsset {
+  id         String   @id @default(uuid())
+  user_id    String
+  asset_type String   @default("image")
+  name       String
+  mime_type  String
+  data       String   // base64 data URL of the uploaded file
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("user_assets")
 }
