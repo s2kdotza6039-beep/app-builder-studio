@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/prisma";
+import { prisma, withRetry, withRetrySafe } from "@/lib/prisma";
 import { callOpenAI } from "./openaiClient";
 import { forgeChatResponseSchema, FileChange } from "./aiSchemas";
 
@@ -9,6 +9,32 @@ export interface EditResult {
   updated: number;
   deleted: number;
 }
+
+/* ------------------------------------------------------------------ */
+/*  Types                                                             */
+/* ------------------------------------------------------------------ */
+
+// BUGFIX: this type was used in tryGenerate() but never declared or imported,
+// which produced "Cannot find name 'ForgeChatResponse'". It is derived from the
+// Zod schema so it can never drift out of sync with validation.
+export type ForgeChatResponse = {
+  reply: string;
+  files?: unknown;
+};
+
+// BUGFIX: messages was inferred as ({role:"system"} | {role:"user"})[] because of
+// the "as const" literals, so pushing role:"assistant" during the self-healing
+// retry failed with:
+//   Type '"assistant"' is not assignable to type '"system" | "user"'
+// Declaring the role union up front fixes it permanently.
+export type ChatRole = "system" | "user" | "assistant";
+export type ChatMessage = { role: ChatRole; content: string };
+
+type RatedRow = {
+  role: string;
+  message: string;
+  metadata: unknown;
+};
 
 /* ------------------------------------------------------------------ */
 /*  Path + content helpers                                            */
@@ -56,7 +82,7 @@ function stripCodeFences(s: string): string {
 /*  JSON extraction (defensive — survives markdown wrapping)          */
 /* ------------------------------------------------------------------ */
 
-function extractJson(text: string): any | null {
+function extractJson(text: string): unknown | null {
   try {
     return JSON.parse(text);
   } catch {
@@ -74,47 +100,78 @@ function extractJson(text: string): any | null {
 }
 
 // Accepts the AI's many naming variants for the file list.
-function normalizeFiles(raw: any): FileChange[] {
+function normalizeFiles(raw: unknown): FileChange[] {
   if (!raw || typeof raw !== "object") return [];
+
+  const obj = raw as Record<string, unknown>;
   const arr =
-    raw.files ??
-    raw.updatedFiles ??
-    raw.createdFiles ??
-    raw.modifiedFiles ??
+    obj.files ??
+    obj.updatedFiles ??
+    obj.createdFiles ??
+    obj.modifiedFiles ??
     [];
+
   if (!Array.isArray(arr)) return [];
+
   return arr
-    .map((f: any) => ({
-      file_path: f?.file_path ?? f?.path ?? f?.filename ?? "",
-      content: typeof f?.content === "string" ? stripCodeFences(f.content) : "",
-      action: ["create", "update", "delete"].includes(f?.action)
-        ? (f.action as "create" | "update" | "delete")
-        : ("update" as const),
-    }))
-    .filter((f: FileChange) => cleanPath(f.file_path).length > 0);
+    .map((entry): FileChange => {
+      const f = (entry ?? {}) as Record<string, unknown>;
+      const rawAction = f.action;
+      const action: "create" | "update" | "delete" =
+        rawAction === "create" || rawAction === "update" || rawAction === "delete"
+          ? rawAction
+          : "update";
+
+      const rawPath = f.file_path ?? f.path ?? f.filename ?? "";
+
+      return {
+        file_path: typeof rawPath === "string" ? rawPath : "",
+        content: typeof f.content === "string" ? stripCodeFences(f.content) : "",
+        action,
+      };
+    })
+    .filter((f) => cleanPath(f.file_path).length > 0);
 }
 
 /* ------------------------------------------------------------------ */
 /*  Traffic-Light preferences (learned from message ratings)         */
 /* ------------------------------------------------------------------ */
 
-function buildPrefs(rated: any[]): string {
-  const pick = (r: string) =>
+function buildPrefs(rated: RatedRow[]): string {
+  const pick = (r: string): string[] =>
     rated
-      .filter((x) => (x.metadata as any)?.rating === r)
+      .filter((x) => {
+        const meta = x.metadata as { rating?: unknown } | null;
+        return meta?.rating === r;
+      })
       .map((x) => x.message)
       .filter(Boolean)
       .slice(0, 12);
+
   const green = pick("green");
   const orange = pick("orange");
   const red = pick("red");
+
   const parts: string[] = [];
-  if (green.length)
-    parts.push(`GREEN (user loves / absolute pass — do more of this):\n- ${green.join("\n- ")}`);
-  if (orange.length)
-    parts.push(`ORANGE (partial pass — refine these):\n- ${orange.join("\n- ")}`);
-  if (red.length)
+
+  // BUGFIX: these three lines were written as  parts.push`...`);
+  // The opening parenthesis was missing, turning a function call into a tagged
+  // template literal and leaving a stray ")". That is a hard syntax error -
+  // the whole file failed to compile.
+  if (green.length) {
+    parts.push(
+      `GREEN (user loves / absolute pass — do more of this):\n- ${green.join("\n- ")}`
+    );
+  }
+  if (orange.length) {
+    parts.push(
+      `ORANGE (partial pass — refine these):\n- ${orange.join("\n- ")}`
+    );
+  }
+  if (red.length) {
     parts.push(`RED (user dislikes — avoid this):\n- ${red.join("\n- ")}`);
+  }
+
   return parts.join("\n\n");
 }
 
@@ -154,13 +211,23 @@ NEW PAGE / ROUTE CONVENTIONS (use these exact paths):
 - Reusable UI:  components/<Name>.tsx  (components/Navbar.tsx, components/Logo.tsx)
 - When you create 2 or more pages, ALSO create a navigation (components/Navbar.tsx, or a nav bar inside app/layout.tsx) with working links so every page is reachable. Use plain <a href="/about"> links (Next.js <Link> is auto-stubbed to <a> in the live preview).
 
-EXAMPLE — user says "Create an About page with a big heading 'About Us'":
-{
-  "reply": "Done! I created your About page at app/about/page.tsx. 🧠",
-  "files": [
-    { "file_path": "app/about/page.tsx", "action": "create", "content": "export default function AboutPage() {\n  return (\n    <main className=\"min-h-screen p-10\">\n      <h1 className=\"text-4xl font-bold\">About Us</h1>\n      <p className=\"mt-4 text-slate-600\">Welcome to our story.</p>\n    </main>\n  );\n}\n" }
-  ]
-}
+LIVE PREVIEW REALITY — READ THIS CAREFULLY:
+The user's live Preview pane renders ONLY the home route, app/page.tsx. It does not have a
+router and it cannot navigate to other files. This has a critical consequence:
+
+- WHENEVER you create a new page, you MUST ALSO update app/page.tsx in the SAME response so
+  the new work is visible and reachable. Return BOTH files in the "files" array.
+- Concretely: create app/about/page.tsx (action "create") AND update app/page.tsx
+  (action "update") to render a navigation bar containing <a href="/about">About</a>.
+- If you create a shared component such as components/Navbar.tsx, you MUST also import and
+  render it inside app/page.tsx, otherwise the user sees a blank or unchanged screen and
+  believes you did nothing.
+- A response that creates files the user cannot see on the home page is a FAILED response.
+
+NAVIGATION IS NOT OPTIONAL:
+- Every multi-page app gets a visible nav bar on the home page listing every route you created.
+- Style the nav properly: horizontal flex row, spacing, hover states, an obvious brand/logo on
+  the left. Never output a bare unstyled list of links.
 
 DESIGN & LOGO MASTERY (professional, up-class):
 - When asked for a logo or graphic, produce a clean, modern SVG component using viewBox, gradients, and geometric paths.
@@ -188,6 +255,11 @@ ARCHITECTURE PRINCIPLES (apply by default):
 - Small, composable components — one responsibility each; co-locate related files.
 - One design system: define colors, spacing, radius, typography once and reuse.
 
+INTERACTIVITY RULE:
+- Any file using useState, useEffect, onClick, onChange or any browser API MUST start with
+  the exact line: "use client";
+- This is the single most common runtime failure. Check every file before returning it.
+
 APP-TYPE PLAYBOOK (recognize intent and scaffold accordingly):
 - SaaS Dashboard: sidebar nav, auth, settings, data tables, charts.
 - Landing Page: hero, features, testimonials, pricing, CTA, footer.
@@ -201,14 +273,16 @@ You are precise, authoritative, and you ALWAYS deliver working code.`;
 /*  Core engine                                                       */
 /* ------------------------------------------------------------------ */
 
-async function tryGenerate(messages: any[]): Promise<ForgeChatResponse | null> {
+async function tryGenerate(
+  messages: ChatMessage[]
+): Promise<ForgeChatResponse | null> {
   try {
     const text = await callOpenAI(messages, { json: true });
     const json = extractJson(text);
     if (!json) return null;
     const result = forgeChatResponseSchema.safeParse(json);
     if (!result.success) return null;
-    return result.data;
+    return result.data as ForgeChatResponse;
   } catch (e) {
     console.error("=== EDITOR GENERATE ERROR ===", e);
     return null;
@@ -221,19 +295,33 @@ export async function editProjectCode(input: {
   history: { role: string; content: string }[];
   pinnedContext?: string;
 }): Promise<EditResult> {
-  const existing = await prisma.projectFile.findMany({
-    where: { project_id: input.projectId },
-  });
-
-  const ratedRows = await prisma.aiMessage.findMany({
-    where: { project_id: input.projectId },
-    orderBy: { created_at: "desc" },
-    take: 120,
-    select: { role: true, message: true, metadata: true },
-  });
-  const rated = ratedRows.filter(
-    (r) => r.metadata && typeof r.metadata === "object" && (r.metadata as any).rating
+  // Neon free tier sleeps after 5 minutes. These two reads run before any AI work,
+  // so without retry a sleeping database made Shang Tsung fail instead of build.
+  const existing = await withRetry(
+    () =>
+      prisma.projectFile.findMany({
+        where: { project_id: input.projectId },
+      }),
+    { label: `codeEditor:files:${input.projectId}` }
   );
+
+  // Ratings are a nice-to-have. If they fail we still build - never block on them.
+  const ratedRows = await withRetrySafe(
+    () =>
+      prisma.aiMessage.findMany({
+        where: { project_id: input.projectId },
+        orderBy: { created_at: "desc" },
+        take: 120,
+        select: { role: true, message: true, metadata: true },
+      }),
+    [],
+    { label: `codeEditor:ratings:${input.projectId}` }
+  );
+
+  const rated: RatedRow[] = ratedRows.filter((r) => {
+    if (!r.metadata || typeof r.metadata !== "object") return false;
+    return Boolean((r.metadata as { rating?: unknown }).rating);
+  });
 
   const tree =
     existing.map((f) => f.file_path).sort().join("\n") || "(no files yet)";
@@ -254,9 +342,10 @@ export async function editProjectCode(input: {
   const system = SYSTEM_PROMPT + pinnedText + prefsText;
   const user = `PROJECT FILE TREE:\n${tree}\n\nRECENT CONVERSATION:\n${historyText}\n\nUSER INSTRUCTION:\n${input.userMessage}\n\nRespond ONLY in the required JSON format.`;
 
-  const messages = [
-    { role: "system" as const, content: system },
-    { role: "user" as const, content: user },
+  // Explicitly typed as ChatMessage[] so the "assistant" retry message is legal.
+  const messages: ChatMessage[] = [
+    { role: "system", content: system },
+    { role: "user", content: user },
   ];
 
   // First attempt
@@ -265,11 +354,11 @@ export async function editProjectCode(input: {
   // Self-healing retry: re-prompt with a correction if parse failed.
   if (!parsed) {
     messages.push({
-      role: "assistant" as const,
+      role: "assistant",
       content: "I will follow the exact JSON format.",
     });
     messages.push({
-      role: "user" as const,
+      role: "user",
       content:
         'Your previous response was invalid. Return ONLY JSON: {"reply": string, "files": [{file_path, content, action}]}. No markdown. Now apply the user instruction.',
     });
@@ -293,6 +382,7 @@ export async function editProjectCode(input: {
   let deleted = 0;
 
   const files = normalizeFiles(parsed);
+
   for (const fc of files) {
     const path = cleanPath(fc.file_path);
     if (!path) continue;
@@ -303,27 +393,42 @@ export async function editProjectCode(input: {
 
     if (fc.action === "delete") {
       if (match) {
-        await prisma.projectFile.delete({ where: { id: match.id } });
+        await withRetry(
+          () => prisma.projectFile.delete({ where: { id: match.id } }),
+          { label: `codeEditor:delete:${path}` }
+        );
         deleted++;
       }
       continue;
     }
 
     if (match) {
-      await prisma.projectFile.update({
-        where: { id: match.id },
-        data: { content: fc.content, language: inferLang(path), updated_at: new Date() },
-      });
+      await withRetry(
+        () =>
+          prisma.projectFile.update({
+            where: { id: match.id },
+            data: {
+              content: fc.content,
+              language: inferLang(path),
+              updated_at: new Date(),
+            },
+          }),
+        { label: `codeEditor:update:${path}` }
+      );
       updated++;
     } else {
-      await prisma.projectFile.create({
-        data: {
-          project_id: input.projectId,
-          file_path: path,
-          content: fc.content,
-          language: inferLang(path),
-        },
-      });
+      await withRetry(
+        () =>
+          prisma.projectFile.create({
+            data: {
+              project_id: input.projectId,
+              file_path: path,
+              content: fc.content,
+              language: inferLang(path),
+            },
+          }),
+        { label: `codeEditor:create:${path}` }
+      );
       created++;
     }
   }
